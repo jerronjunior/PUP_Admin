@@ -21,6 +21,19 @@ export default function LoginPage() {
     }
   };
 
+  const signInDemoAdmin = async () => {
+    const demoEmail = 'admin@gmail.com';
+    const demoPass  = 'admin123';
+    setEmail(demoEmail); setPassword(demoPass); setLoading(true); setError('');
+    try {
+      await signInWithEmailAndPassword(auth, demoEmail, demoPass);
+    } catch (err) {
+      setError('Demo admin sign-in failed: ' + (err?.message || 'Unknown error'));
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
     <div style={s.bg}>
       <form onSubmit={submit} style={s.card}>
@@ -46,6 +59,10 @@ export default function LoginPage() {
           type="submit" disabled={loading}>
           {loading ? 'Signing in…' : 'Sign in →'}
         </button>
+
+        <button type="button" onClick={signInDemoAdmin} style={s.ghost} disabled={loading}>
+          Use admin@gmail.com (demo)
+        </button>
       </form>
     </div>
   );
@@ -60,4 +77,5 @@ const s = {
   input: { width: '100%', padding: '11px 14px', borderRadius: 10, border: '1.5px solid #ddd', fontSize: 14, marginBottom: 18, boxSizing: 'border-box', outline: 'none', transition: 'border .15s' },
   btn:   { width: '100%', padding: '13px', background: 'linear-gradient(135deg,#2E7D32,#388E3C)', color: '#fff', border: 'none', borderRadius: 10, fontSize: 15, fontWeight: 700, cursor: 'pointer', letterSpacing: .3 },
   err:   { background: '#FFEBEE', color: '#C62828', padding: '10px 14px', borderRadius: 10, fontSize: 13, marginBottom: 18, fontWeight: 500 },
+  ghost: { marginTop: 12, width: '100%', padding: '10px', background: '#fff', color: '#2E7D32', border: '2px dashed #C8E6C9', borderRadius: 10, fontSize: 13, fontWeight: 700, cursor: 'pointer' },
 };
