@@ -1,17 +1,18 @@
 // src/firebase.js
-// Replace these values with your Firebase project config.
-// Firebase Console → Project Settings → Your apps → Web app → Config
-import { initializeApp }  from 'firebase/app';
-import { getFirestore }   from 'firebase/firestore';
-import { getAuth }        from 'firebase/auth';
+// Loads Firebase config from environment variables with fallbacks.
+// For web apps, register a Web app in Firebase Console and use that config.
+// If you only have android/google-services.json values, those are used as fallbacks.
+import { initializeApp } from 'firebase/app';
+import { getFirestore }  from 'firebase/firestore';
+import { getAuth }       from 'firebase/auth';
 
 const firebaseConfig = {
-  apiKey:            "YOUR_API_KEY",
-  authDomain:        "YOUR_PROJECT.firebaseapp.com",
-  projectId:         "YOUR_PROJECT_ID",
-  storageBucket:     "YOUR_PROJECT.appspot.com",
-  messagingSenderId: "YOUR_SENDER_ID",
-  appId:             "YOUR_APP_ID",
+  apiKey:            process.env.REACT_APP_FIREBASE_API_KEY || 'AIzaSyDfFAzePht8j1YIsnGABUZikm7tTwyvLIU',
+  authDomain:        process.env.REACT_APP_FIREBASE_AUTH_DOMAIN || `${process.env.REACT_APP_FIREBASE_PROJECT_ID || 'price-ur-plastic-faab5'}.firebaseapp.com`,
+  projectId:         process.env.REACT_APP_FIREBASE_PROJECT_ID || 'price-ur-plastic-faab5',
+  storageBucket:     process.env.REACT_APP_FIREBASE_STORAGE_BUCKET || 'price-ur-plastic-faab5.firebasestorage.app',
+  messagingSenderId: process.env.REACT_APP_FIREBASE_MESSAGING_SENDER_ID || '71140175089',
+  appId:             process.env.REACT_APP_FIREBASE_APP_ID || '1:71140175089:android:6bb69b793b333018818d50',
 };
 
 const app  = initializeApp(firebaseConfig);
