@@ -11,9 +11,10 @@ import RewardsPage     from './pages/RewardsPage';
 import UsersPage       from './pages/UsersPage';
 import NotificationsPage from './pages/NotificationsPage';
 
-// ─── Add your Firebase Auth UID here ────────────────────────────────────────
+// ─── Add your Firebase Auth UID here if you want UID-based access control ───
 // Firebase Console → Authentication → Users → copy UID
 const ADMIN_UIDS = ['PASTE_YOUR_ADMIN_UID_HERE'];
+const CONFIGURED_ADMIN_UIDS = ADMIN_UIDS.filter(uid => uid && !uid.startsWith('PASTE_'));
 
 const NAV = [
   { to: '/',              label: 'Dashboard',     icon: '📊' },
@@ -68,24 +69,9 @@ export default function App() {
   const [user,    setUser]    = useState(null);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    const demo = localStorage.getItem('demoAdmin') === 'true';
-    if (demo) {
-      setUser({ email: 'admin@gmail.com', uid: 'DEMO_ADMIN' });
-      setLoading(false);
-    }
-    const unsub = onAuthStateChanged(auth, u => {
-      if (!demo) setUser(u);
-      setLoading(false);
-    });
-    return unsub;
-  }, []);
+  useEffect(() => onAuthStateChanged(auth, u => { setUser(u); setLoading(false); }), []);
 
-  const signOut = async () => {
-    localStorage.removeItem('demoAdmin');
-    try { await auth.signOut(); } catch (e) { /* ignore */ }
-    setUser(null);
-  };
+  const signOut = () => auth.signOut();
 
   if (loading) return (
     <div style={s.center}>
@@ -93,7 +79,9 @@ export default function App() {
     </div>
   );
 
-  const isAdmin = user && ADMIN_UIDS.includes(user.uid);
+  const isAdmin = Boolean(user) && (
+    CONFIGURED_ADMIN_UIDS.length === 0 || CONFIGURED_ADMIN_UIDS.includes(user.uid)
+  );
 
   if (!user || !isAdmin) return (
     <BrowserRouter><Routes><Route path="*" element={<LoginPage />} /></Routes></BrowserRouter>

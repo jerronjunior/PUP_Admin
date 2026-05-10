@@ -15,28 +15,7 @@ export default function LoginPage() {
     try {
       await signInWithEmailAndPassword(auth, email, password);
     } catch {
-      // If Firebase doesn't have the demo admin account, allow a local demo fallback
-      if (email === 'admin@gmail.com' && password === 'admin123') {
-        localStorage.setItem('demoAdmin', 'true');
-        window.location.reload();
-        return;
-      }
       setError('Invalid email or password. Only admins can log in.');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const signInDemoAdmin = async () => {
-    const demoEmail = 'admin@gmail.com';
-    const demoPass  = 'admin123';
-    setEmail(demoEmail); setPassword(demoPass); setLoading(true); setError('');
-    try {
-      await signInWithEmailAndPassword(auth, demoEmail, demoPass);
-    } catch (err) {
-      // If Firebase doesn't have this demo user, enable a local demo admin session.
-      localStorage.setItem('demoAdmin', 'true');
-      window.location.reload();
     } finally {
       setLoading(false);
     }
@@ -44,7 +23,7 @@ export default function LoginPage() {
 
   return (
     <div style={s.bg}>
-      <form onSubmit={submit} style={s.card}>
+      <form onSubmit={submit} style={s.card} autoComplete="new-password">
         <div style={{ textAlign: 'center', marginBottom: 28 }}>
           <div style={{ fontSize: 52, marginBottom: 8 }}>♻️</div>
           <h1 style={s.title}>RecycleScan Admin</h1>
@@ -55,21 +34,21 @@ export default function LoginPage() {
 
         <label style={s.label}>Email address</label>
         <input style={s.input} type="email" required autoFocus
+          name="adminLoginEmail"
+          autoComplete="new-password"
           value={email} onChange={e => setEmail(e.target.value)}
-          placeholder="admin@yourapp.com" />
+          placeholder="Enter email" />
 
         <label style={s.label}>Password</label>
         <input style={s.input} type="password" required
+          name="adminLoginPassword"
+          autoComplete="new-password"
           value={password} onChange={e => setPassword(e.target.value)}
-          placeholder="••••••••" />
+          placeholder="Enter password" />
 
         <button style={{ ...s.btn, opacity: loading ? .7 : 1 }}
           type="submit" disabled={loading}>
           {loading ? 'Signing in…' : 'Sign in →'}
-        </button>
-
-        <button type="button" onClick={signInDemoAdmin} style={s.ghost} disabled={loading}>
-          Use admin@gmail.com (demo)
         </button>
       </form>
     </div>
@@ -85,5 +64,4 @@ const s = {
   input: { width: '100%', padding: '11px 14px', borderRadius: 10, border: '1.5px solid #ddd', fontSize: 14, marginBottom: 18, boxSizing: 'border-box', outline: 'none', transition: 'border .15s' },
   btn:   { width: '100%', padding: '13px', background: 'linear-gradient(135deg,#2E7D32,#388E3C)', color: '#fff', border: 'none', borderRadius: 10, fontSize: 15, fontWeight: 700, cursor: 'pointer', letterSpacing: .3 },
   err:   { background: '#FFEBEE', color: '#C62828', padding: '10px 14px', borderRadius: 10, fontSize: 13, marginBottom: 18, fontWeight: 500 },
-  ghost: { marginTop: 12, width: '100%', padding: '10px', background: '#fff', color: '#2E7D32', border: '2px dashed #C8E6C9', borderRadius: 10, fontSize: 13, fontWeight: 700, cursor: 'pointer' },
 };
