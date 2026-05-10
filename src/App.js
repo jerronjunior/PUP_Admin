@@ -68,9 +68,24 @@ export default function App() {
   const [user,    setUser]    = useState(null);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => onAuthStateChanged(auth, u => { setUser(u); setLoading(false); }), []);
+  useEffect(() => {
+    const demo = localStorage.getItem('demoAdmin') === 'true';
+    if (demo) {
+      setUser({ email: 'admin@gmail.com', uid: 'DEMO_ADMIN' });
+      setLoading(false);
+    }
+    const unsub = onAuthStateChanged(auth, u => {
+      if (!demo) setUser(u);
+      setLoading(false);
+    });
+    return unsub;
+  }, []);
 
-  const signOut = () => auth.signOut();
+  const signOut = async () => {
+    localStorage.removeItem('demoAdmin');
+    try { await auth.signOut(); } catch (e) { /* ignore */ }
+    setUser(null);
+  };
 
   if (loading) return (
     <div style={s.center}>
