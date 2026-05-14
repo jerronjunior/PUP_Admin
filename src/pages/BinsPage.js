@@ -13,6 +13,12 @@ import {
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import useMediaQuery from '../hooks/useMediaQuery';
 
+const FRAME_WIDTH = 96;
+const FRAME_HEIGHT = 72;
+const MOTION_THRESHOLD = 16;
+const STABLE_THRESHOLD = 8;
+const STABLE_FRAMES_REQUIRED = 4;
+
 const BIN_TYPES = [
   { value: 'coca_cola',    label: '🔴 Coca-Cola Give Back Life' },
   { value: 'cargills',     label: '🔴 Cargills Food City' },
@@ -38,6 +44,9 @@ export default function BinsPage() {
   const [photoUrl,  setPhotoUrl]  = useState('');
   const [photoPreviewSrc, setPhotoPreviewSrc] = useState('');
   const [photoErr,  setPhotoErr]  = useState('');
+  const [cameraOpen, setCameraOpen] = useState(false);
+  const [cameraErr, setCameraErr] = useState('');
+  const [autoStatus, setAutoStatus] = useState('Camera idle');
   const [saving,   setSaving]   = useState(false);
   const [deleting, setDeleting] = useState(null);
 
@@ -46,6 +55,14 @@ export default function BinsPage() {
   const [searching, setSearching] = useState(false);
   const [results,   setResults]   = useState([]);
   const searchTimer = useRef(null);
+  const videoRef = useRef(null);
+  const detectCanvasRef = useRef(null);
+  const captureCanvasRef = useRef(null);
+  const streamRef = useRef(null);
+  const detectIntervalRef = useRef(null);
+  const previousFrameRef = useRef(null);
+  const stableCountRef = useRef(0);
+  const motionSeenRef = useRef(false);
 
   useEffect(() => {
     return onSnapshot(
@@ -67,6 +84,25 @@ export default function BinsPage() {
     setPhotoPreviewSrc(objectUrl);
     return () => URL.revokeObjectURL(objectUrl);
   }, [photoFile]);
+
+  useEffect(() => {
+    if (!showForm) {
+      if (detectIntervalRef.current) {
+        clearInterval(detectIntervalRef.current);
+        detectIntervalRef.current = null;
+      }
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach(t => t.stop());
+        streamRef.current = null;
+      }
+      previousFrameRef.current = null;
+      stableCountRef.current = 0;
+      motionSeenRef.current = false;
+      setCameraOpen(false);
+      setCameraErr('');
+      setAutoStatus('Camera idle');
+    }
+  }, [showForm]);
 
   // Debounced location search using Nominatim (free, no key)
   useEffect(() => {
@@ -96,13 +132,144 @@ export default function BinsPage() {
     setResults([]);
   };
 
+  const stopCamera = () => {
+    if (detectIntervalRef.current) {
+      clearInterval(detectIntervalRef.current);
+      detectIntervalRef.current = null;
+    }
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(t => t.stop());
+      streamRef.current = null;
+    }
+    previousFrameRef.current = null;
+    stableCountRef.current = 0;
+    motionSeenRef.current = false;
+    setCameraOpen(false);
+  };
+
+  const captureFromCamera = () => {
+    const video = videoRef.current;
+    const canvas = captureCanvasRef.current;
+    if (!video || !canvas || !video.videoWidth || !video.videoHeight) return;
+
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    canvas.toBlob(blob => {
+      if (!blob) return;
+      const autoFile = new File([blob], `bin-${Date.now()}.jpg`, { type: 'image/jpeg' });
+      setPhotoFile(autoFile);
+      setPhotoErr('');
+      setCameraErr('');
+      setAutoStatus('Captured automatically');
+      stopCamera();
+    }, 'image/jpeg', 0.9);
+  };
+
+  const startDetectionLoop = () => {
+    if (detectIntervalRef.current) clearInterval(detectIntervalRef.current);
+    detectIntervalRef.current = setInterval(() => {
+      const video = videoRef.current;
+      const canvas = detectCanvasRef.current;
+      if (!video || !canvas || !video.videoWidth || !video.videoHeight) return;
+
+      canvas.width = FRAME_WIDTH;
+      canvas.height = FRAME_HEIGHT;
+      const ctx = canvas.getContext('2d', { willReadFrequently: true });
+      if (!ctx) return;
+
+      ctx.drawImage(video, 0, 0, FRAME_WIDTH, FRAME_HEIGHT);
+      const frame = ctx.getImageData(0, 0, FRAME_WIDTH, FRAME_HEIGHT).data;
+
+      if (!previousFrameRef.current) {
+        previousFrameRef.current = new Uint8ClampedArray(frame);
+        setAutoStatus('Detecting bin... point camera at bin');
+        return;
+      }
+
+      let diffSum = 0;
+      let pixels = 0;
+      for (let i = 0; i < frame.length; i += 4) {
+        const diff =
+          Math.abs(frame[i] - previousFrameRef.current[i]) +
+          Math.abs(frame[i + 1] - previousFrameRef.current[i + 1]) +
+          Math.abs(frame[i + 2] - previousFrameRef.current[i + 2]);
+        diffSum += diff / 3;
+        pixels += 1;
+      }
+
+      previousFrameRef.current = new Uint8ClampedArray(frame);
+      const avgDiff = diffSum / Math.max(1, pixels);
+
+      if (!motionSeenRef.current && avgDiff > MOTION_THRESHOLD) {
+        motionSeenRef.current = true;
+        setAutoStatus('Bin detected. Hold steady...');
+        stableCountRef.current = 0;
+        return;
+      }
+
+      if (motionSeenRef.current) {
+        if (avgDiff < STABLE_THRESHOLD) {
+          stableCountRef.current += 1;
+          const remaining = STABLE_FRAMES_REQUIRED - stableCountRef.current;
+          if (remaining > 0) setAutoStatus(`Hold steady... ${remaining}`);
+          if (stableCountRef.current >= STABLE_FRAMES_REQUIRED) {
+            captureFromCamera();
+          }
+        } else {
+          stableCountRef.current = 0;
+        }
+      }
+    }, 350);
+  };
+
+  const startCamera = async () => {
+    setCameraErr('');
+    setAutoStatus('Starting camera...');
+
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      setCameraErr('Camera API is not supported in this browser.');
+      setAutoStatus('Camera unavailable');
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: 'environment' } },
+        audio: false,
+      });
+      streamRef.current = stream;
+      setCameraOpen(true);
+
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        await videoRef.current.play();
+      }
+
+      previousFrameRef.current = null;
+      stableCountRef.current = 0;
+      motionSeenRef.current = false;
+      startDetectionLoop();
+    } catch {
+      setCameraOpen(false);
+      setAutoStatus('Camera unavailable');
+      setCameraErr('Could not access camera. Allow camera permission or upload a photo manually.');
+    }
+  };
+
   const openAdd = () => {
+    stopCamera();
     setEditing(null); setForm(EMPTY_FORM); setShowForm(true);
     setPhotoFile(null); setPhotoUrl(''); setPhotoErr('');
+    setCameraErr(''); setAutoStatus('Camera idle');
     setSearchQ(''); setResults([]);
   };
 
   const openEdit = bin => {
+    stopCamera();
     setEditing(bin.id);
     setForm({
       binId:        bin.binId        || '',
@@ -115,6 +282,7 @@ export default function BinsPage() {
     setPhotoFile(null);
     setPhotoUrl(bin.photoUrl || '');
     setPhotoErr('');
+    setCameraErr(''); setAutoStatus('Camera idle');
     setSearchQ(''); setResults([]);
     setShowForm(true);
   };
@@ -141,6 +309,8 @@ export default function BinsPage() {
 
     setPhotoErr('');
     setPhotoFile(file);
+    stopCamera();
+    setAutoStatus('Photo selected');
   };
 
   const handleSave = async e => {
@@ -183,6 +353,7 @@ export default function BinsPage() {
       setPhotoFile(null);
       setPhotoUrl('');
       setPhotoErr('');
+      stopCamera();
     } finally {
       setSaving(false);
     }
@@ -211,11 +382,11 @@ export default function BinsPage() {
 
       {/* ── Form modal ─────────────────────────────────────────────── */}
       {showForm && (
-        <div style={s.overlay} onClick={() => setShowForm(false)}>
+        <div style={s.overlay} onClick={() => { stopCamera(); setShowForm(false); }}>
           <div style={{ ...s.modal, ...(isMobile ? s.modalMobile : {}) }} onClick={e => e.stopPropagation()}>
             <div style={s.modalHeader}>
               <h2 style={s.modalTitle}>{editing ? '✏️ Edit Bin' : '📍 Add New Bin'}</h2>
-              <button onClick={() => setShowForm(false)} style={s.closeBtn}>✕</button>
+              <button onClick={() => { stopCamera(); setShowForm(false); }} style={s.closeBtn}>✕</button>
             </div>
 
             <form onSubmit={handleSave}>
@@ -254,6 +425,26 @@ export default function BinsPage() {
 
               {/* Bin photo upload */}
               <Field label="Bin Photo *">
+                <div style={s.cameraActionRow}>
+                  <button type="button" style={s.cameraBtn} onClick={startCamera}>
+                    📷 Detect + Auto Capture
+                  </button>
+                  {cameraOpen && (
+                    <button type="button" style={s.cameraStopBtn} onClick={stopCamera}>
+                      Stop Camera
+                    </button>
+                  )}
+                </div>
+                <div style={s.fileHint}>{autoStatus}</div>
+                {cameraErr && <div style={s.fileError}>{cameraErr}</div>}
+
+                {cameraOpen && (
+                  <div style={s.cameraPreviewWrap}>
+                    <video ref={videoRef} style={s.cameraPreview} autoPlay playsInline muted />
+                    <div style={s.cameraOverlay}>Auto-detecting bin. Hold camera steady.</div>
+                  </div>
+                )}
+
                 <input
                   style={s.fileInput}
                   type="file"
@@ -320,7 +511,7 @@ export default function BinsPage() {
               )}
 
               <div style={s.modalFooter}>
-                <button type="button" onClick={() => setShowForm(false)} style={s.cancelBtn}>
+                <button type="button" onClick={() => { stopCamera(); setShowForm(false); }} style={s.cancelBtn}>
                   Cancel
                 </button>
                 <button type="submit" style={s.saveBtn} disabled={saving}>
@@ -328,6 +519,8 @@ export default function BinsPage() {
                 </button>
               </div>
             </form>
+            <canvas ref={detectCanvasRef} style={{ display: 'none' }} />
+            <canvas ref={captureCanvasRef} style={{ display: 'none' }} />
           </div>
         </div>
       )}
@@ -409,6 +602,12 @@ const s = {
   latLngGrid:   { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 },
   latLngGridMobile: { gridTemplateColumns: '1fr', gap: 10 },
   input:        { width: '100%', padding: '9px 12px', borderRadius: 9, border: '1.5px solid #ddd', fontSize: 14, boxSizing: 'border-box', outline: 'none' },
+  cameraActionRow:{ display: 'flex', gap: 8, marginBottom: 8, flexWrap: 'wrap' },
+  cameraBtn:    { padding: '8px 12px', background: '#1565C0', color: '#fff', border: 'none', borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: 'pointer' },
+  cameraStopBtn:{ padding: '8px 12px', background: '#eceff1', color: '#455A64', border: 'none', borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: 'pointer' },
+  cameraPreviewWrap:{ marginBottom: 8, borderRadius: 10, overflow: 'hidden', border: '1px solid #d9e3e8', position: 'relative' },
+  cameraPreview:{ width: '100%', maxHeight: 240, objectFit: 'cover', display: 'block', background: '#000' },
+  cameraOverlay:{ position: 'absolute', left: 8, right: 8, bottom: 8, background: 'rgba(0,0,0,.55)', color: '#fff', fontSize: 12, padding: '6px 8px', borderRadius: 7, textAlign: 'center' },
   fileInput:    { width: '100%', padding: '8px 0', fontSize: 14, color: '#333' },
   fileHint:     { fontSize: 12, color: '#6f7d88', marginTop: 4 },
   fileError:    { fontSize: 12, color: '#C62828', marginTop: 6, fontWeight: 600 },
