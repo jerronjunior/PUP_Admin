@@ -96,12 +96,18 @@ export default function App() {
   const [user,    setUser]    = useState(null);
   const [loading, setLoading] = useState(true);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
   const isMobile = useMediaQuery('(max-width: 900px)');
   const isTinyMobile = useMediaQuery('(max-width: 360px)');
 
   useEffect(() => onAuthStateChanged(auth, u => { setUser(u); setLoading(false); }), []);
 
-  const signOut = () => auth.signOut();
+  const handleSignOut = () => setShowLogoutConfirm(true);
+  const confirmSignOut = () => {
+    setShowLogoutConfirm(false);
+    auth.signOut();
+  };
+  const cancelSignOut = () => setShowLogoutConfirm(false);
 
   useEffect(() => {
     if (!isMobile) setMobileNavOpen(false);
@@ -135,7 +141,7 @@ export default function App() {
               ☰
             </button>
             <div style={{ ...s.mobileHeaderTitle, ...(isTinyMobile ? s.mobileHeaderTitleTiny : {}) }}>RecycleScan Admin</div>
-            <button onClick={signOut} style={s.mobileSignOutBtn} title="Sign out">⏻</button>
+            <button onClick={handleSignOut} style={s.mobileSignOutBtn} title="Sign out">⏻</button>
           </header>
 
           {mobileNavOpen && <div style={s.mobileOverlay} onClick={() => setMobileNavOpen(false)} />}
@@ -144,7 +150,7 @@ export default function App() {
             <div style={s.mobileDrawer}>
               <Sidebar
                 user={user}
-                onSignOut={signOut}
+                onSignOut={handleSignOut}
                 onNavigate={() => setMobileNavOpen(false)}
                 isMobile
               />
@@ -167,7 +173,7 @@ export default function App() {
         </div>
       ) : (
         <div style={s.layout}>
-          <Sidebar user={user} onSignOut={signOut} />
+          <Sidebar user={user} onSignOut={handleSignOut} />
           <main style={s.main}>
             <Routes>
               <Route path="/"              element={<DashboardPage />} />
@@ -179,6 +185,25 @@ export default function App() {
               <Route path="*"              element={<Navigate to="/" />} />
             </Routes>
           </main>
+        </div>
+      )}
+
+      {/* Logout Confirmation Modal */}
+      {showLogoutConfirm && (
+        <div style={s.modalOverlay} onClick={cancelSignOut}>
+          <div style={s.modal} onClick={e => e.stopPropagation()}>
+            <div style={s.modalHeader}>
+              <span style={s.modalTitle}>🚪 Confirm Logout</span>
+              <button onClick={cancelSignOut} style={s.modalCloseBtn}>✕</button>
+            </div>
+            <div style={s.modalBody}>
+              <p style={s.modalMessage}>Are you sure you want to logout?</p>
+            </div>
+            <div style={s.modalFooter}>
+              <button onClick={cancelSignOut} style={s.modalBtnCancel}>No, Stay</button>
+              <button onClick={confirmSignOut} style={s.modalBtnConfirm}>Yes, Logout</button>
+            </div>
+          </div>
         </div>
       )}
     </BrowserRouter>
@@ -216,4 +241,14 @@ const s = {
   bottomNavLabel: { fontSize: 10, fontWeight: 700, lineHeight: 1.1 },
   center:     { display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100vh', background: '#F0F4F8' },
   spinner:    { width: 36, height: 36, border: '3px solid #ddd', borderTop: '3px solid #2E7D32', borderRadius: '50%', animation: 'spin .7s linear infinite' },
+  modalOverlay: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999 },
+  modal: { background: '#fff', borderRadius: 16, boxShadow: '0 20px 60px rgba(0,0,0,.3)', maxWidth: 420, width: '90%', overflow: 'hidden', animation: 'modalSlideIn .3s ease-out' },
+  modalHeader: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '18px 22px', borderBottom: '1px solid #e8edf2', background: '#fafbfc' },
+  modalTitle: { fontSize: 16, fontWeight: 800, color: '#1B5E20' },
+  modalCloseBtn: { background: 'none', border: 'none', color: '#888', fontSize: 20, cursor: 'pointer', padding: '0 4px', display: 'flex', alignItems: 'center', justifyContent: 'center' },
+  modalBody: { padding: '24px 22px' },
+  modalMessage: { margin: 0, fontSize: 15, color: '#555', lineHeight: 1.5 },
+  modalFooter: { display: 'flex', gap: 12, padding: '14px 22px 18px', borderTop: '1px solid #e8edf2', justifyContent: 'flex-end' },
+  modalBtnCancel: { padding: '10px 20px', background: '#f0f4f8', color: '#555', border: '1px solid #d9e3e8', borderRadius: 9, fontSize: 14, fontWeight: 700, cursor: 'pointer', transition: 'all .15s' },
+  modalBtnConfirm: { padding: '10px 20px', background: '#a42f2f', color: '#fff', border: 'none', borderRadius: 9, fontSize: 14, fontWeight: 700, cursor: 'pointer', transition: 'all .15s' },
 };
