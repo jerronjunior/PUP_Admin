@@ -8,8 +8,11 @@ import { db } from '../firebase';
 import { collection, onSnapshot, query, orderBy, getDocs } from 'firebase/firestore';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
 import { Link } from 'react-router-dom';
+import useMediaQuery from '../hooks/useMediaQuery';
 
 export default function DashboardPage() {
+  const isMobile = useMediaQuery('(max-width: 768px)');
+  const isTinyMobile = useMediaQuery('(max-width: 360px)');
   const [stats,    setStats]    = useState({ users: 0, bins: 0, bottles: 0 });
   const [users,    setUsers]    = useState([]);
   const [chartData,setChartData]= useState([]);
@@ -55,12 +58,12 @@ export default function DashboardPage() {
   return (
     <div>
       {/* Header */}
-      <div style={s.pageHeader}>
+      <div style={{ ...s.pageHeader, ...(isMobile ? s.pageHeaderMobile : {}) }}>
         <div>
-          <h1 style={s.h1}>Admin Dashboard</h1>
+          <h1 style={{ ...s.h1, ...(isMobile ? s.h1Mobile : {}), ...(isTinyMobile ? s.h1Tiny : {}) }}>Admin Dashboard</h1>
           <p style={s.sub}>Live system statistics</p>
         </div>
-        <button onClick={handleRefresh} style={s.refreshBtn}>
+        <button onClick={handleRefresh} style={{ ...s.refreshBtn, ...(isMobile ? s.refreshBtnMobile : {}), ...(isTinyMobile ? s.refreshBtnTiny : {}) }}>
           {refreshed ? '✓ Refreshed' : '↻ Refresh'}
         </button>
       </div>
@@ -69,7 +72,7 @@ export default function DashboardPage() {
 
         {/* ── System Statistics ──────────────────────────────────────── */}
         <Section title="System Statistics" icon="📈">
-          <div style={s.statGrid}>
+          <div style={{ ...s.statGrid, ...(isMobile ? s.statGridMobile : {}) }}>
             <StatCard label="Total Users"            value={stats.users}   icon="👥" color="#1565C0" />
             <StatCard label="Total Bins"             value={stats.bins}    icon="🗑️" color="#2E7D32" />
             <StatCard label="Total Bottles Recycled" value={stats.bottles} icon="♻️" color="#F57F17" wide />
@@ -94,7 +97,7 @@ export default function DashboardPage() {
 
         {/* ── Admin Actions ──────────────────────────────────────────── */}
         <Section title="Admin Actions" icon="⚙️">
-          <div style={s.actionGrid}>
+          <div style={{ ...s.actionGrid, ...(isMobile ? s.actionGridMobile : {}) }}>
             <ActionCard
               to="/bins"
               icon="📍"
@@ -112,41 +115,49 @@ export default function DashboardPage() {
 
         {/* ── User Points and Bottles ────────────────────────────────── */}
         <Section title="User Points and Bottles" icon="👥">
-          <div style={s.tableWrap}>
-            <table style={s.table}>
-              <thead>
-                <tr style={{ background: '#F1F8E9' }}>
-                  {['User', 'Email', 'Bottles', 'Points', 'Admin'].map(h => (
-                    <th key={h} style={s.th}>{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {users.map(u => (
-                  <tr key={u.id} style={s.tr}>
-                    <td style={s.td}>
-                      <div style={s.userRow}>
-                        <div style={s.avatar}>{(u.name || u.email || '?')[0].toUpperCase()}</div>
-                        <span style={{ fontWeight: 600, color: '#222' }}>{u.name || '—'}</span>
-                      </div>
-                    </td>
-                    <td style={{ ...s.td, color: '#666', fontSize: 13 }}>{u.email}</td>
-                    <td style={{ ...s.td, fontWeight: 700, color: '#2E7D32', textAlign: 'center' }}>
-                      {u.totalBottles || 0}
-                    </td>
-                    <td style={{ ...s.td, fontWeight: 700, color: '#F57F17', textAlign: 'center' }}>
-                      {u.totalPoints || 0}
-                    </td>
-                    <td style={{ ...s.td, textAlign: 'center' }}>
-                      {u.isAdmin
-                        ? <Badge color="#1565C0" bg="#E3F2FD">Admin</Badge>
-                        : <Badge color="#666" bg="#F5F5F5">User</Badge>}
-                    </td>
+          {isMobile ? (
+            <div style={s.mobileUserList}>
+              {users.map(u => (
+                <UserSummaryCard key={u.id} user={u} />
+              ))}
+            </div>
+          ) : (
+            <div style={s.tableWrap}>
+              <table style={s.table}>
+                <thead>
+                  <tr style={{ background: '#F1F8E9' }}>
+                    {['User', 'Email', 'Bottles', 'Points', 'Admin'].map(h => (
+                      <th key={h} style={s.th}>{h}</th>
+                    ))}
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {users.map(u => (
+                    <tr key={u.id} style={s.tr}>
+                      <td style={s.td}>
+                        <div style={s.userRow}>
+                          <div style={s.avatar}>{(u.name || u.email || '?')[0].toUpperCase()}</div>
+                          <span style={{ fontWeight: 600, color: '#222' }}>{u.name || '—'}</span>
+                        </div>
+                      </td>
+                      <td style={{ ...s.td, color: '#666', fontSize: 13 }}>{u.email}</td>
+                      <td style={{ ...s.td, fontWeight: 700, color: '#2E7D32', textAlign: 'center' }}>
+                        {u.totalBottles || 0}
+                      </td>
+                      <td style={{ ...s.td, fontWeight: 700, color: '#F57F17', textAlign: 'center' }}>
+                        {u.totalPoints || 0}
+                      </td>
+                      <td style={{ ...s.td, textAlign: 'center' }}>
+                        {u.isAdmin
+                          ? <Badge color="#1565C0" bg="#E3F2FD">Admin</Badge>
+                          : <Badge color="#666" bg="#F5F5F5">User</Badge>}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </Section>
       </>}
     </div>
@@ -155,9 +166,10 @@ export default function DashboardPage() {
 
 // ── Sub-components ────────────────────────────────────────────────────────────
 function Section({ title, icon, children }) {
+  const isMobile = useMediaQuery('(max-width: 768px)');
   return (
-    <div style={s.section}>
-      <h2 style={s.sectionTitle}>{icon} {title}</h2>
+    <div style={{ ...s.section, ...(isMobile ? s.sectionMobile : {}) }}>
+      <h2 style={{ ...s.sectionTitle, ...(isMobile ? s.sectionTitleMobile : {}) }}>{icon} {title}</h2>
       {children}
     </div>
   );
@@ -196,26 +208,75 @@ function Badge({ children, color, bg }) {
   );
 }
 
+function UserSummaryCard({ user }) {
+  return (
+    <div style={s.mobileUserCard}>
+      <div style={s.userRow}>
+        <div style={s.avatar}>{(user.name || user.email || '?')[0].toUpperCase()}</div>
+        <div style={{ minWidth: 0 }}>
+          <div style={s.mobileUserName}>{user.name || '—'}</div>
+          <div style={s.mobileUserEmail}>{user.email || 'No email'}</div>
+        </div>
+      </div>
+
+      <div style={s.mobileUserStats}>
+        <div style={s.mobileStatTile}>
+          <div style={s.mobileStatLabel}>Bottles</div>
+          <div style={{ ...s.mobileStatValue, color: '#2E7D32' }}>{user.totalBottles || 0}</div>
+        </div>
+        <div style={s.mobileStatTile}>
+          <div style={s.mobileStatLabel}>Points</div>
+          <div style={{ ...s.mobileStatValue, color: '#F57F17' }}>{user.totalPoints || 0}</div>
+        </div>
+        <div style={s.mobileRoleWrap}>
+          {user.isAdmin
+            ? <Badge color="#1565C0" bg="#E3F2FD">Admin</Badge>
+            : <Badge color="#666" bg="#F5F5F5">User</Badge>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function Loader() {
   return <div style={{ textAlign: 'center', padding: 60, color: '#aaa' }}>Loading…</div>;
 }
 
 const s = {
   pageHeader: { display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 24 },
+  pageHeaderMobile: { flexDirection: 'column', gap: 10, marginBottom: 16 },
   h1:         { margin: 0, fontSize: 28, fontWeight: 800, color: '#1B5E20' },
+  h1Mobile:   { fontSize: 24 },
+  h1Tiny:     { fontSize: 21 },
   sub:        { margin: '4px 0 0', color: '#888', fontSize: 14 },
   refreshBtn: { padding: '8px 18px', background: '#fff', border: '1.5px solid #ddd', borderRadius: 8, cursor: 'pointer', fontSize: 13, fontWeight: 600, color: '#444' },
+  refreshBtnMobile: { width: '100%' },
+  refreshBtnTiny: { fontSize: 12, padding: '8px 12px' },
   section:    { background: '#fff', borderRadius: 14, padding: '22px 24px', marginBottom: 20, boxShadow: '0 2px 10px rgba(0,0,0,.06)' },
+  sectionMobile: { padding: '16px 14px', marginBottom: 14, borderRadius: 12 },
   sectionTitle:{ margin: '0 0 18px', fontSize: 18, fontWeight: 700, color: '#222' },
+  sectionTitleMobile: { fontSize: 16, marginBottom: 14 },
   statGrid:   { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 },
+  statGridMobile: { gridTemplateColumns: '1fr', gap: 10 },
   statCard:   { background: '#FAFAFA', borderRadius: 12, padding: '20px 16px', textAlign: 'center', border: '1px solid #eee' },
   actionGrid: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 },
+  actionGridMobile: { gridTemplateColumns: '1fr', gap: 10 },
   actionCard: { display: 'flex', alignItems: 'center', gap: 14, padding: '16px 18px', border: '1.5px solid #eee', borderRadius: 12, background: '#FAFAFA', transition: 'box-shadow .15s', cursor: 'pointer' },
   actionIcon: { width: 52, height: 52, borderRadius: 12, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 24, flexShrink: 0 },
   actionTitle:{ fontWeight: 700, fontSize: 15, color: '#222', marginBottom: 3 },
   actionDesc: { fontSize: 13, color: '#777' },
+  mobileUserList: { display: 'flex', flexDirection: 'column', gap: 10 },
+  mobileUserCard: { background: '#FAFAFA', border: '1px solid #eee', borderRadius: 10, padding: '12px 10px' },
+  mobileUserName: { fontSize: 14, fontWeight: 700, color: '#222', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
+  mobileUserEmail: { fontSize: 12, color: '#6f7d88', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', marginTop: 2 },
+  mobileUserStats: { display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: 8, marginTop: 10, alignItems: 'end' },
+  mobileStatTile: { background: '#fff', border: '1px solid #edf1f4', borderRadius: 8, padding: '8px 6px' },
+  mobileStatLabel: { fontSize: 10, textTransform: 'uppercase', letterSpacing: .4, color: '#8897a3', marginBottom: 4 },
+  mobileStatValue: { fontSize: 17, fontWeight: 800, lineHeight: 1 },
+  mobileRoleWrap: { display: 'flex', justifyContent: 'flex-end', alignItems: 'center' },
   tableWrap:  { overflowX: 'auto', borderRadius: 10, border: '1px solid #eee' },
   table:      { width: '100%', borderCollapse: 'collapse', fontSize: 14 },
+  tableMobile:{ minWidth: 760, fontSize: 13 },
   th:         { padding: '12px 16px', textAlign: 'left', fontWeight: 700, color: '#2E7D32', fontSize: 12, textTransform: 'uppercase', letterSpacing: .4, borderBottom: '2px solid #E8F5E9' },
   tr:         { borderBottom: '1px solid #F5F5F5' },
   td:         { padding: '12px 16px', verticalAlign: 'middle' },

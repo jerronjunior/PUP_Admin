@@ -7,6 +7,7 @@
 import React, { useEffect, useState } from 'react';
 import { db } from '../firebase';
 import { doc, onSnapshot, setDoc, serverTimestamp } from 'firebase/firestore';
+import useMediaQuery from '../hooks/useMediaQuery';
 
 const DEFAULT = {
   pointsPerBottle:  1,
@@ -19,6 +20,7 @@ const DEFAULT = {
 };
 
 export default function RewardsPage() {
+  const isMobile = useMediaQuery('(max-width: 768px)');
   const [cfg,     setCfg]     = useState(null);
   const [gifts,   setGifts]   = useState('');  // textarea string
   const [saving,  setSaving]  = useState(false);
@@ -62,14 +64,14 @@ export default function RewardsPage() {
 
   return (
     <div>
-      <h1 style={s.h1}>Manage Rewards</h1>
+      <h1 style={{ ...s.h1, ...(isMobile ? s.h1Mobile : {}) }}>Manage Rewards</h1>
       <p style={s.sub}>Changes reflect in the app immediately after saving.</p>
 
       <form onSubmit={handleSave}>
 
         {/* ── Recycling Rewards ────────────────────────────────────── */}
-        <Card icon="♻️" title="Recycling Rewards">
-          <div style={s.grid3}>
+        <Card icon="♻️" title="Recycling Rewards" isMobile={isMobile}>
+          <div style={{ ...s.grid3, ...(isMobile ? s.grid3Mobile : {}) }}>
             <NumberField
               label="Points per Bottle"
               icon="⭐"
@@ -89,7 +91,7 @@ export default function RewardsPage() {
         </Card>
 
         {/* ── Wheel Gifts ───────────────────────────────────────────── */}
-        <Card icon="🎡" title="Spin Wheel Gifts">
+        <Card icon="🎡" title="Spin Wheel Gifts" isMobile={isMobile}>
           <label style={s.label}>Reward Gifts <span style={s.hint}>(one gift per line)</span></label>
           <textarea
             style={s.textarea}
@@ -108,8 +110,8 @@ export default function RewardsPage() {
         </Card>
 
         {/* ── Reward Tiers ─────────────────────────────────────────── */}
-        <Card icon="🏆" title="Reward Tiers">
-          <div style={s.grid3}>
+        <Card icon="🏆" title="Reward Tiers" isMobile={isMobile}>
+          <div style={{ ...s.grid3, ...(isMobile ? s.grid3Mobile : {}) }}>
             <NumberField
               label="Bronze Tier Points"
               icon="🥉"
@@ -156,12 +158,12 @@ export default function RewardsPage() {
         </Card>
 
         {/* ── Buttons ──────────────────────────────────────────────── */}
-        <div style={s.btnRow}>
-          <button type="button" onClick={handleReset} style={s.resetBtn}
+        <div style={{ ...s.btnRow, ...(isMobile ? s.btnRowMobile : {}) }}>
+          <button type="button" onClick={handleReset} style={{ ...s.resetBtn, ...(isMobile ? s.actionBtnMobile : {}) }}
             disabled={saving}>
             ↻ Reset to Current
           </button>
-          <button type="submit" style={s.saveBtn} disabled={saving}>
+          <button type="submit" style={{ ...s.saveBtn, ...(isMobile ? s.actionBtnMobile : {}) }} disabled={saving}>
             {saved ? '✓ Saved!' : saving ? 'Saving…' : '💾 Save Changes'}
           </button>
         </div>
@@ -170,10 +172,10 @@ export default function RewardsPage() {
   );
 }
 
-function Card({ icon, title, children }) {
+function Card({ icon, title, children, isMobile }) {
   return (
-    <div style={s.card}>
-      <h3 style={s.cardTitle}>{icon} {title}</h3>
+    <div style={{ ...s.card, ...(isMobile ? s.cardMobile : {}) }}>
+      <h3 style={{ ...s.cardTitle, ...(isMobile ? s.cardTitleMobile : {}) }}>{icon} {title}</h3>
       {children}
     </div>
   );
@@ -196,10 +198,14 @@ function NumberField({ label, icon, color, value, onChange }) {
 
 const s = {
   h1:          { margin: '0 0 4px', fontSize: 28, fontWeight: 800, color: '#1B5E20' },
+  h1Mobile:    { fontSize: 24 },
   sub:         { margin: '0 0 24px', color: '#888', fontSize: 14 },
   card:        { background: '#fff', borderRadius: 14, padding: '22px 24px', marginBottom: 18, boxShadow: '0 2px 10px rgba(0,0,0,.06)' },
+  cardMobile:  { padding: '16px 14px', marginBottom: 14 },
   cardTitle:   { margin: '0 0 18px', fontSize: 18, fontWeight: 700, color: '#222' },
+  cardTitleMobile: { fontSize: 16, marginBottom: 14 },
   grid3:       { display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 16, marginBottom: 4 },
+  grid3Mobile: { gridTemplateColumns: '1fr', gap: 10 },
   label:       { display: 'block', fontSize: 12, fontWeight: 700, color: '#555', marginBottom: 6, textTransform: 'uppercase', letterSpacing: .4 },
   hint:        { fontWeight: 400, textTransform: 'none', color: '#aaa', fontSize: 11 },
   input:       { width: '100%', padding: '10px 12px', borderRadius: 9, border: '2px solid #ddd', fontSize: 18, fontWeight: 700, boxSizing: 'border-box', outline: 'none', textAlign: 'center' },
@@ -215,6 +221,8 @@ const s = {
   tierBar:     { flex: 1, height: 8, background: '#f0f0f0', borderRadius: 4, overflow: 'hidden' },
   tierPts:     { width: 70, textAlign: 'right', fontSize: 12, color: '#666', fontWeight: 600 },
   btnRow:      { display: 'flex', gap: 12, justifyContent: 'flex-end', marginTop: 4 },
+  btnRowMobile:{ flexDirection: 'column-reverse', alignItems: 'stretch', gap: 8 },
+  actionBtnMobile: { width: '100%' },
   resetBtn:    { padding: '12px 24px', background: '#fff', border: '1.5px solid #ddd', borderRadius: 10, fontSize: 14, fontWeight: 600, color: '#555', cursor: 'pointer' },
   saveBtn:     { padding: '12px 32px', background: 'linear-gradient(135deg,#2E7D32,#388E3C)', color: '#fff', border: 'none', borderRadius: 10, fontSize: 15, fontWeight: 800, cursor: 'pointer', letterSpacing: .3 },
 };

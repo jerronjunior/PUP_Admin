@@ -10,6 +10,7 @@ import {
   collection, onSnapshot, addDoc, updateDoc, deleteDoc,
   doc, serverTimestamp, query, orderBy
 } from 'firebase/firestore';
+import useMediaQuery from '../hooks/useMediaQuery';
 
 const BIN_TYPES = [
   { value: 'coca_cola',    label: '🔴 Coca-Cola Give Back Life' },
@@ -25,6 +26,7 @@ const EMPTY_FORM = {
 };
 
 export default function BinsPage() {
+  const isMobile = useMediaQuery('(max-width: 768px)');
   const [bins,     setBins]     = useState([]);
   const [loading,  setLoading]  = useState(true);
   const [showForm, setShowForm] = useState(false);
@@ -135,25 +137,25 @@ export default function BinsPage() {
 
   return (
     <div>
-      <div style={s.pageHeader}>
+      <div style={{ ...s.pageHeader, ...(isMobile ? s.pageHeaderMobile : {}) }}>
         <div>
-          <h1 style={s.h1}>Manage Bins</h1>
+          <h1 style={{ ...s.h1, ...(isMobile ? s.h1Mobile : {}) }}>Manage Bins</h1>
           <p style={s.sub}>{bins.length} bin{bins.length !== 1 ? 's' : ''} registered</p>
         </div>
-        <button onClick={openAdd} style={s.addBtn}>＋ Add Bin Location</button>
+        <button onClick={openAdd} style={{ ...s.addBtn, ...(isMobile ? s.addBtnMobile : {}) }}>＋ Add Bin Location</button>
       </div>
 
       {/* ── Form modal ─────────────────────────────────────────────── */}
       {showForm && (
         <div style={s.overlay} onClick={() => setShowForm(false)}>
-          <div style={s.modal} onClick={e => e.stopPropagation()}>
+          <div style={{ ...s.modal, ...(isMobile ? s.modalMobile : {}) }} onClick={e => e.stopPropagation()}>
             <div style={s.modalHeader}>
               <h2 style={s.modalTitle}>{editing ? '✏️ Edit Bin' : '📍 Add New Bin'}</h2>
               <button onClick={() => setShowForm(false)} style={s.closeBtn}>✕</button>
             </div>
 
             <form onSubmit={handleSave}>
-              <div style={s.formGrid}>
+              <div style={{ ...s.formGrid, ...(isMobile ? s.formGridMobile : {}) }}>
                 {/* Bin ID */}
                 <Field label="Bin ID *">
                   <input style={s.input} required value={form.binId}
@@ -207,7 +209,7 @@ export default function BinsPage() {
               </Field>
 
               {/* Manual lat/lng */}
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+              <div style={{ ...s.latLngGrid, ...(isMobile ? s.latLngGridMobile : {}) }}>
                 <Field label="Latitude *">
                   <input style={s.input} required type="number" step="any"
                     value={form.latitude} onChange={e => update('latitude', e.target.value)}
@@ -257,11 +259,11 @@ export default function BinsPage() {
             {bins.map(b => {
               const binTypeMeta = BIN_TYPES.find(t => t.value === b.binType);
               return (
-                <div key={b.id} style={s.binCard}>
+                <div key={b.id} style={{ ...s.binCard, ...(isMobile ? s.binCardMobile : {}) }}>
                   <div style={s.binIcon}>📍</div>
                   <div style={{ flex: 1 }}>
                     <div style={s.binName}>{b.locationName}</div>
-                    <div style={s.binMeta}>
+                    <div style={{ ...s.binMeta, ...(isMobile ? s.binMetaMobile : {}) }}>
                       <span style={s.binTag}>{b.binId}</span>
                       {binTypeMeta && <span style={s.typePill}>{binTypeMeta.label}</span>}
                     </div>
@@ -271,7 +273,7 @@ export default function BinsPage() {
                         : 'No coordinates'}
                     </div>
                   </div>
-                  <div style={s.binActions}>
+                  <div style={{ ...s.binActions, ...(isMobile ? s.binActionsMobile : {}) }}>
                     <button onClick={() => openEdit(b)} style={s.editBtn}>✏️ Edit</button>
                     <button onClick={() => handleDelete(b.id)} style={s.delBtn}
                       disabled={deleting === b.id}>
@@ -301,15 +303,22 @@ function Field({ label, children }) {
 
 const s = {
   pageHeader:   { display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 24 },
+  pageHeaderMobile: { flexDirection: 'column', gap: 10, marginBottom: 16 },
   h1:           { margin: 0, fontSize: 28, fontWeight: 800, color: '#1B5E20' },
+  h1Mobile:     { fontSize: 24 },
   sub:          { margin: '4px 0 0', color: '#888', fontSize: 14 },
   addBtn:       { padding: '10px 20px', background: '#2E7D32', color: '#fff', border: 'none', borderRadius: 10, fontSize: 14, fontWeight: 700, cursor: 'pointer' },
+  addBtnMobile: { width: '100%' },
   overlay:      { position: 'fixed', inset: 0, background: 'rgba(0,0,0,.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 },
   modal:        { background: '#fff', borderRadius: 16, padding: '28px 28px 20px', width: 560, maxHeight: '90vh', overflowY: 'auto', boxShadow: '0 20px 60px rgba(0,0,0,.25)' },
+  modalMobile:  { width: 'calc(100vw - 20px)', maxHeight: '86vh', padding: '18px 14px 14px', borderRadius: 12 },
   modalHeader:  { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 22 },
   modalTitle:   { margin: 0, fontSize: 20, fontWeight: 800, color: '#1B5E20' },
   closeBtn:     { background: 'none', border: 'none', fontSize: 18, cursor: 'pointer', color: '#888', padding: '4px 8px' },
   formGrid:     { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 },
+  formGridMobile: { gridTemplateColumns: '1fr', gap: 10 },
+  latLngGrid:   { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 },
+  latLngGridMobile: { gridTemplateColumns: '1fr', gap: 10 },
   input:        { width: '100%', padding: '9px 12px', borderRadius: 9, border: '1.5px solid #ddd', fontSize: 14, boxSizing: 'border-box', outline: 'none' },
   dropdown:     { position: 'absolute', top: '100%', left: 0, right: 0, background: '#fff', border: '1.5px solid #ddd', borderRadius: 10, boxShadow: '0 6px 20px rgba(0,0,0,.12)', zIndex: 100, maxHeight: 200, overflowY: 'auto' },
   dropdownItem: { display: 'block', width: '100%', padding: '10px 14px', background: 'none', border: 'none', textAlign: 'left', cursor: 'pointer', fontSize: 13, color: '#333', borderBottom: '1px solid #f0f0f0' },
@@ -325,13 +334,16 @@ const s = {
   emptySub:     { fontSize: 14, color: '#888' },
   list:         { display: 'flex', flexDirection: 'column', gap: 12 },
   binCard:      { display: 'flex', alignItems: 'center', gap: 16, background: '#fff', borderRadius: 14, padding: '16px 20px', boxShadow: '0 2px 8px rgba(0,0,0,.06)', border: '1px solid #eee' },
+  binCardMobile:{ flexDirection: 'column', alignItems: 'flex-start', gap: 10, padding: '14px 12px' },
   binIcon:      { fontSize: 28, flexShrink: 0 },
   binName:      { fontWeight: 700, fontSize: 16, color: '#222', marginBottom: 4 },
   binMeta:      { display: 'flex', gap: 8, alignItems: 'center', marginBottom: 4 },
+  binMetaMobile:{ flexWrap: 'wrap' },
   binTag:       { background: '#E8F5E9', color: '#2E7D32', padding: '2px 8px', borderRadius: 6, fontSize: 11, fontWeight: 700 },
   typePill:     { background: '#F3E5F5', color: '#6A1B9A', padding: '2px 8px', borderRadius: 6, fontSize: 11, fontWeight: 600 },
   binCoords:    { fontSize: 12, color: '#888', fontFamily: 'monospace' },
   binActions:   { display: 'flex', gap: 8, flexShrink: 0 },
+  binActionsMobile: { width: '100%', justifyContent: 'flex-end' },
   editBtn:      { padding: '7px 14px', background: '#E3F2FD', color: '#1565C0', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 12, fontWeight: 700 },
   delBtn:       { padding: '7px 12px', background: '#FFEBEE', color: '#C62828', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 14 },
 };
