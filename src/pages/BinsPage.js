@@ -5,11 +5,12 @@
 //   - Edit existing bin
 //   - Delete bin with confirm dialog
 import React, { useEffect, useState, useRef } from 'react';
-import { db } from '../firebase';
+import { db, storage } from '../firebase';
 import {
   collection, onSnapshot, addDoc, updateDoc, deleteDoc,
   doc, serverTimestamp, query, orderBy
 } from 'firebase/firestore';
+import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import useMediaQuery from '../hooks/useMediaQuery';
 
 const BIN_TYPES = [
@@ -33,6 +34,10 @@ export default function BinsPage() {
   const [showForm, setShowForm] = useState(false);
   const [editing,  setEditing]  = useState(null); // bin doc id
   const [form,     setForm]     = useState(EMPTY_FORM);
+  const [photoFile, setPhotoFile] = useState(null);
+  const [photoUrl,  setPhotoUrl]  = useState('');
+  const [photoPreviewSrc, setPhotoPreviewSrc] = useState('');
+  const [photoErr,  setPhotoErr]  = useState('');
   const [saving,   setSaving]   = useState(false);
   const [deleting, setDeleting] = useState(null);
 
@@ -51,6 +56,17 @@ export default function BinsPage() {
       }
     );
   }, []);
+
+  useEffect(() => {
+    if (!photoFile) {
+      setPhotoPreviewSrc('');
+      return;
+    }
+
+    const objectUrl = URL.createObjectURL(photoFile);
+    setPhotoPreviewSrc(objectUrl);
+    return () => URL.revokeObjectURL(objectUrl);
+  }, [photoFile]);
 
   // Debounced location search using Nominatim (free, no key)
   useEffect(() => {
@@ -82,6 +98,7 @@ export default function BinsPage() {
 
   const openAdd = () => {
     setEditing(null); setForm(EMPTY_FORM); setShowForm(true);
+    setPhotoFile(null); setPhotoUrl(''); setPhotoErr('');
     setSearchQ(''); setResults([]);
   };
 
@@ -95,15 +112,57 @@ export default function BinsPage() {
       longitude:    bin.longitude    != null ? String(bin.longitude) : '',
       qrCode:       bin.qrCode       || '',
     });
+    setPhotoFile(null);
+    setPhotoUrl(bin.photoUrl || '');
+    setPhotoErr('');
     setSearchQ(''); setResults([]);
     setShowForm(true);
+  };
+
+  const handlePhotoChange = e => {
+    const file = e.target.files?.[0];
+    if (!file) {
+      setPhotoFile(null);
+      return;
+    }
+
+    if (!file.type.startsWith('image/')) {
+      setPhotoErr('Please choose a valid image file.');
+      setPhotoFile(null);
+      return;
+    }
+
+    const maxSize = 8 * 1024 * 1024;
+    if (file.size > maxSize) {
+      setPhotoErr('Image must be 8MB or less.');
+      setPhotoFile(null);
+      return;
+    }
+
+    setPhotoErr('');
+    setPhotoFile(file);
   };
 
   const handleSave = async e => {
     e.preventDefault();
     if (!form.binId || !form.locationName) return;
+
+    if (!photoFile && !photoUrl) {
+      setPhotoErr('Bin photo is mandatory. Please add a photo before saving.');
+      return;
+    }
+
     setSaving(true);
     try {
+      let uploadedPhotoUrl = photoUrl;
+
+      if (photoFile) {
+        const safeName = photoFile.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+        const imageRef = ref(storage, `bin_photos/${form.binId}-${Date.now()}-${safeName}`);
+        await uploadBytes(imageRef, photoFile);
+        uploadedPhotoUrl = await getDownloadURL(imageRef);
+      }
+
       const payload = {
         binId:        form.binId,
         locationName: form.locationName,
@@ -111,6 +170,7 @@ export default function BinsPage() {
         qrCode:       form.qrCode || form.binId,
         latitude:     parseFloat(form.latitude)  || 0,
         longitude:    parseFloat(form.longitude) || 0,
+        photoUrl:     uploadedPhotoUrl,
       };
       if (editing) {
         await updateDoc(doc(db, 'bins', editing), payload);
@@ -120,6 +180,9 @@ export default function BinsPage() {
         });
       }
       setShowForm(false);
+      setPhotoFile(null);
+      setPhotoUrl('');
+      setPhotoErr('');
     } finally {
       setSaving(false);
     }
@@ -188,6 +251,28 @@ export default function BinsPage() {
                     placeholder="Optional" />
                 </Field>
               </div>
+
+              {/* Bin photo upload */}
+              <Field label="Bin Photo *">
+                <input
+                  style={s.fileInput}
+                  type="file"
+                  accept="image/*"
+                  capture="environment"
+                  onChange={handlePhotoChange}
+                />
+                <div style={s.fileHint}>Take or upload a clear photo of the bin. This is required.</div>
+                {photoErr && <div style={s.fileError}>{photoErr}</div>}
+                {(photoFile || photoUrl) && (
+                  <div style={s.photoPreviewWrap}>
+                    <img
+                      alt="Bin preview"
+                      style={s.photoPreview}
+                      src={photoFile ? photoPreviewSrc : photoUrl}
+                    />
+                  </div>
+                )}
+              </Field>
 
               {/* Location search */}
               <Field label="Search Location (OpenStreetMap)">
@@ -261,7 +346,9 @@ export default function BinsPage() {
               const binTypeMeta = BIN_TYPES.find(t => t.value === b.binType);
               return (
                 <div key={b.id} style={{ ...s.binCard, ...(isMobile ? s.binCardMobile : {}) }}>
-                  <div style={s.binIcon}>📍</div>
+                  {b.photoUrl
+                    ? <img src={b.photoUrl} alt={b.locationName || 'Bin'} style={s.binPhoto} />
+                    : <div style={s.binIcon}>📍</div>}
                   <div style={{ flex: 1 }}>
                     <div style={s.binName}>{b.locationName}</div>
                     <div style={{ ...s.binMeta, ...(isMobile ? s.binMetaMobile : {}) }}>
@@ -322,6 +409,11 @@ const s = {
   latLngGrid:   { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 },
   latLngGridMobile: { gridTemplateColumns: '1fr', gap: 10 },
   input:        { width: '100%', padding: '9px 12px', borderRadius: 9, border: '1.5px solid #ddd', fontSize: 14, boxSizing: 'border-box', outline: 'none' },
+  fileInput:    { width: '100%', padding: '8px 0', fontSize: 14, color: '#333' },
+  fileHint:     { fontSize: 12, color: '#6f7d88', marginTop: 4 },
+  fileError:    { fontSize: 12, color: '#C62828', marginTop: 6, fontWeight: 600 },
+  photoPreviewWrap: { marginTop: 10, borderRadius: 10, overflow: 'hidden', border: '1px solid #e6ecef', width: 180, height: 120, background: '#f7faf9' },
+  photoPreview: { width: '100%', height: '100%', objectFit: 'cover', display: 'block' },
   dropdown:     { position: 'absolute', top: '100%', left: 0, right: 0, background: '#fff', border: '1.5px solid #ddd', borderRadius: 10, boxShadow: '0 6px 20px rgba(0,0,0,.12)', zIndex: 100, maxHeight: 200, overflowY: 'auto' },
   dropdownItem: { display: 'block', width: '100%', padding: '10px 14px', background: 'none', border: 'none', textAlign: 'left', cursor: 'pointer', fontSize: 13, color: '#333', borderBottom: '1px solid #f0f0f0' },
   searchingMsg: { position: 'absolute', right: 12, top: '50%', transform: 'translateY(-50%)', fontSize: 12, color: '#888' },
@@ -338,6 +430,7 @@ const s = {
   binCard:      { display: 'flex', alignItems: 'center', gap: 16, background: '#fff', borderRadius: 14, padding: '16px 20px', boxShadow: '0 2px 8px rgba(0,0,0,.06)', border: '1px solid #eee' },
   binCardMobile:{ flexDirection: 'column', alignItems: 'flex-start', gap: 10, padding: '14px 12px' },
   binIcon:      { fontSize: 28, flexShrink: 0 },
+  binPhoto:     { width: 68, height: 68, objectFit: 'cover', borderRadius: 10, flexShrink: 0, border: '1px solid #e3eaee' },
   binName:      { fontWeight: 700, fontSize: 16, color: '#222', marginBottom: 4 },
   binMeta:      { display: 'flex', gap: 8, alignItems: 'center', marginBottom: 4 },
   binMetaMobile:{ flexWrap: 'wrap' },
