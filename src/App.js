@@ -11,6 +11,7 @@ import BinsPage        from './pages/BinsPage';
 import RewardsPage     from './pages/RewardsPage';
 import UsersPage       from './pages/UsersPage';
 import NotificationsPage from './pages/NotificationsPage';
+import ProfilePage     from './pages/ProfilePage';
 
 // ─── Add your Firebase Auth UID here if you want UID-based access control ───
 // Firebase Console → Authentication → Users → copy UID
@@ -56,11 +57,13 @@ function Sidebar({ user, onSignOut, onNavigate, isMobile }) {
 
       {/* User info + sign out */}
       <div style={s.userRow}>
-        <div style={s.userAvatar}>{(user?.email || '?')[0].toUpperCase()}</div>
-        <div style={{ flex: 1, overflow: 'hidden' }}>
-          <div style={s.userEmail}>{user?.email}</div>
-          <div style={s.userRole}>Administrator</div>
-        </div>
+        <NavLink to="/profile" onClick={onNavigate} style={{ display: 'flex', alignItems: 'center', gap: 10, flex: 1, minWidth: 0, textDecoration: 'none', cursor: 'pointer' }}>
+          <div style={s.userAvatar}>{(user?.email || '?')[0].toUpperCase()}</div>
+          <div style={{ flex: 1, overflow: 'hidden' }}>
+            <div style={s.userEmail}>{user?.email}</div>
+            <div style={s.userRole}>Administrator</div>
+          </div>
+        </NavLink>
         <button onClick={onSignOut} style={s.signOutBtn} title="Sign out">⏻</button>
       </div>
     </aside>
@@ -155,6 +158,7 @@ export default function App() {
               <Route path="/bins"          element={<BinsPage />} />
               <Route path="/rewards"       element={<RewardsPage />} />
               <Route path="/notifications" element={<NotificationsPage />} />
+              <Route path="/profile"       element={<ProfilePage user={user} />} />
               <Route path="*"              element={<Navigate to="/" />} />
             </Routes>
           </main>
@@ -171,6 +175,7 @@ export default function App() {
               <Route path="/bins"          element={<BinsPage />} />
               <Route path="/rewards"       element={<RewardsPage />} />
               <Route path="/notifications" element={<NotificationsPage />} />
+              <Route path="/profile"       element={<ProfilePage user={user} />} />
               <Route path="*"              element={<Navigate to="/" />} />
             </Routes>
           </main>
