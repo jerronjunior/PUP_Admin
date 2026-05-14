@@ -6,6 +6,7 @@ import useMediaQuery from '../hooks/useMediaQuery';
 
 export default function LoginPage() {
   const isMobile = useMediaQuery('(max-width: 768px)');
+  const isTinyMobile = useMediaQuery('(max-width: 360px)');
   const [email,    setEmail]    = useState('');
   const [password, setPassword] = useState('');
   const [error,    setError]    = useState('');
@@ -25,7 +26,7 @@ export default function LoginPage() {
 
   return (
     <div style={s.bg}>
-      <form onSubmit={submit} style={{ ...s.card, ...(isMobile ? s.cardMobile : {}) }} autoComplete="new-password">
+      <form onSubmit={submit} style={{ ...s.card, ...(isMobile ? s.cardMobile : {}), ...(isTinyMobile ? s.cardTiny : {}) }} autoComplete="new-password">
         <div style={{ textAlign: 'center', marginBottom: 28 }}>
           <div style={{ fontSize: 52, marginBottom: 8 }}>♻️</div>
           <h1 style={s.title}>RecycleScan Admin</h1>
@@ -61,6 +62,7 @@ const s = {
   bg:    { minHeight: '100vh', padding: 14, background: 'linear-gradient(135deg,#1B5E20,#2E7D32)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'Inter,system-ui,sans-serif' },
   card:  { background: '#fff', borderRadius: 20, padding: '40px 36px', width: 380, boxShadow: '0 20px 60px rgba(0,0,0,.25)' },
   cardMobile: { width: '100%', maxWidth: 420, padding: '26px 18px', borderRadius: 14 },
+  cardTiny: { padding: '22px 14px', borderRadius: 12 },
   title: { margin: '0 0 6px', fontSize: 22, fontWeight: 800, color: '#1B5E20' },
   sub:   { margin: 0, color: '#888', fontSize: 14 },
   label: { display: 'block', fontSize: 12, fontWeight: 700, color: '#555', margin: '0 0 5px', textTransform: 'uppercase', letterSpacing: .5 },

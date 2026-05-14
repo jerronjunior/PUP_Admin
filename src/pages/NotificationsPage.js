@@ -9,6 +9,7 @@ import useMediaQuery from '../hooks/useMediaQuery';
 
 export default function NotificationsPage() {
   const isMobile = useMediaQuery('(max-width: 768px)');
+  const isTinyMobile = useMediaQuery('(max-width: 360px)');
   const [history,  setHistory]  = useState([]);
   const [users,    setUsers]    = useState([]);
   const [form,     setForm]     = useState({ title: '', subtitle: '', target: 'all', userId: '' });
@@ -64,11 +65,11 @@ export default function NotificationsPage() {
 
   return (
     <div>
-      <h1 style={{ ...s.h1, ...(isMobile ? s.h1Mobile : {}) }}>Notifications</h1>
+      <h1 style={{ ...s.h1, ...(isMobile ? s.h1Mobile : {}), ...(isTinyMobile ? s.h1Tiny : {}) }}>Notifications</h1>
       <p style={s.sub}>Send announcements or alerts to users</p>
 
       {/* Send form */}
-      <div style={s.card}>
+      <div style={{ ...s.card, ...(isTinyMobile ? s.cardTiny : {}) }}>
         <h3 style={s.cardTitle}>📤 Send Notification</h3>
         <form onSubmit={handleSend}>
           <div style={{ ...s.grid2, ...(isMobile ? s.grid2Mobile : {}) }}>
@@ -137,8 +138,10 @@ export default function NotificationsPage() {
 const s = {
   h1:          { margin: '0 0 4px', fontSize: 28, fontWeight: 800, color: '#1B5E20' },
   h1Mobile:    { fontSize: 24 },
+  h1Tiny:      { fontSize: 21 },
   sub:         { margin: '0 0 24px', color: '#888', fontSize: 14 },
   card:        { background: '#fff', borderRadius: 14, padding: '22px 24px', marginBottom: 24, boxShadow: '0 2px 10px rgba(0,0,0,.06)' },
+  cardTiny:    { padding: '16px 12px', borderRadius: 12 },
   cardTitle:   { margin: '0 0 18px', fontSize: 18, fontWeight: 700, color: '#222' },
   grid2:       { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 14 },
   grid2Mobile: { gridTemplateColumns: '1fr', gap: 10 },

@@ -27,6 +27,7 @@ const EMPTY_FORM = {
 
 export default function BinsPage() {
   const isMobile = useMediaQuery('(max-width: 768px)');
+  const isTinyMobile = useMediaQuery('(max-width: 360px)');
   const [bins,     setBins]     = useState([]);
   const [loading,  setLoading]  = useState(true);
   const [showForm, setShowForm] = useState(false);
@@ -139,7 +140,7 @@ export default function BinsPage() {
     <div>
       <div style={{ ...s.pageHeader, ...(isMobile ? s.pageHeaderMobile : {}) }}>
         <div>
-          <h1 style={{ ...s.h1, ...(isMobile ? s.h1Mobile : {}) }}>Manage Bins</h1>
+          <h1 style={{ ...s.h1, ...(isMobile ? s.h1Mobile : {}), ...(isTinyMobile ? s.h1Tiny : {}) }}>Manage Bins</h1>
           <p style={s.sub}>{bins.length} bin{bins.length !== 1 ? 's' : ''} registered</p>
         </div>
         <button onClick={openAdd} style={{ ...s.addBtn, ...(isMobile ? s.addBtnMobile : {}) }}>＋ Add Bin Location</button>
@@ -306,6 +307,7 @@ const s = {
   pageHeaderMobile: { flexDirection: 'column', gap: 10, marginBottom: 16 },
   h1:           { margin: 0, fontSize: 28, fontWeight: 800, color: '#1B5E20' },
   h1Mobile:     { fontSize: 24 },
+  h1Tiny:       { fontSize: 21 },
   sub:          { margin: '4px 0 0', color: '#888', fontSize: 14 },
   addBtn:       { padding: '10px 20px', background: '#2E7D32', color: '#fff', border: 'none', borderRadius: 10, fontSize: 14, fontWeight: 700, cursor: 'pointer' },
   addBtnMobile: { width: '100%' },

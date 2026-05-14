@@ -21,6 +21,7 @@ const DEFAULT = {
 
 export default function RewardsPage() {
   const isMobile = useMediaQuery('(max-width: 768px)');
+  const isTinyMobile = useMediaQuery('(max-width: 360px)');
   const [cfg,     setCfg]     = useState(null);
   const [gifts,   setGifts]   = useState('');  // textarea string
   const [saving,  setSaving]  = useState(false);
@@ -64,7 +65,7 @@ export default function RewardsPage() {
 
   return (
     <div>
-      <h1 style={{ ...s.h1, ...(isMobile ? s.h1Mobile : {}) }}>Manage Rewards</h1>
+      <h1 style={{ ...s.h1, ...(isMobile ? s.h1Mobile : {}), ...(isTinyMobile ? s.h1Tiny : {}) }}>Manage Rewards</h1>
       <p style={s.sub}>Changes reflect in the app immediately after saving.</p>
 
       <form onSubmit={handleSave}>
@@ -158,7 +159,7 @@ export default function RewardsPage() {
         </Card>
 
         {/* ── Buttons ──────────────────────────────────────────────── */}
-        <div style={{ ...s.btnRow, ...(isMobile ? s.btnRowMobile : {}) }}>
+        <div style={{ ...s.btnRow, ...(isMobile ? s.btnRowMobile : {}), ...(isTinyMobile ? s.btnRowTiny : {}) }}>
           <button type="button" onClick={handleReset} style={{ ...s.resetBtn, ...(isMobile ? s.actionBtnMobile : {}) }}
             disabled={saving}>
             ↻ Reset to Current
@@ -199,6 +200,7 @@ function NumberField({ label, icon, color, value, onChange }) {
 const s = {
   h1:          { margin: '0 0 4px', fontSize: 28, fontWeight: 800, color: '#1B5E20' },
   h1Mobile:    { fontSize: 24 },
+  h1Tiny:      { fontSize: 21 },
   sub:         { margin: '0 0 24px', color: '#888', fontSize: 14 },
   card:        { background: '#fff', borderRadius: 14, padding: '22px 24px', marginBottom: 18, boxShadow: '0 2px 10px rgba(0,0,0,.06)' },
   cardMobile:  { padding: '16px 14px', marginBottom: 14 },
@@ -222,6 +224,7 @@ const s = {
   tierPts:     { width: 70, textAlign: 'right', fontSize: 12, color: '#666', fontWeight: 600 },
   btnRow:      { display: 'flex', gap: 12, justifyContent: 'flex-end', marginTop: 4 },
   btnRowMobile:{ flexDirection: 'column-reverse', alignItems: 'stretch', gap: 8 },
+  btnRowTiny:  { gap: 6 },
   actionBtnMobile: { width: '100%' },
   resetBtn:    { padding: '12px 24px', background: '#fff', border: '1.5px solid #ddd', borderRadius: 10, fontSize: 14, fontWeight: 600, color: '#555', cursor: 'pointer' },
   saveBtn:     { padding: '12px 32px', background: 'linear-gradient(135deg,#2E7D32,#388E3C)', color: '#fff', border: 'none', borderRadius: 10, fontSize: 15, fontWeight: 800, cursor: 'pointer', letterSpacing: .3 },
