@@ -1,27 +1,27 @@
-import { useEffect, useState } from 'react';
+// src/hooks/useMediaQuery.js
+// Mirrors Flutter's MediaQuery — returns true when the CSS media query matches.
+// Used by BinsPage for responsive layout (mobile vs desktop).
+import { useState, useEffect } from 'react';
 
 export default function useMediaQuery(query) {
-  const getMatch = () => {
-    if (typeof window === 'undefined' || !window.matchMedia) return false;
-    return window.matchMedia(query).matches;
-  };
-
-  const [matches, setMatches] = useState(getMatch);
+  const [matches, setMatches] = useState(
+    () => (typeof window !== 'undefined' && window.matchMedia ? window.matchMedia(query).matches : false)
+  );
 
   useEffect(() => {
-    if (typeof window === 'undefined' || !window.matchMedia) return undefined;
+    if (typeof window === 'undefined' || !window.matchMedia) return;
 
-    const mediaQuery = window.matchMedia(query);
-    const onChange = () => setMatches(mediaQuery.matches);
+    const mq = window.matchMedia(query);
+    const handler = e => setMatches(e.matches);
 
-    onChange();
-    if (mediaQuery.addEventListener) {
-      mediaQuery.addEventListener('change', onChange);
-      return () => mediaQuery.removeEventListener('change', onChange);
+    // Modern browsers
+    if (mq.addEventListener) {
+      mq.addEventListener('change', handler);
+      return () => mq.removeEventListener('change', handler);
     }
-
-    mediaQuery.addListener(onChange);
-    return () => mediaQuery.removeListener(onChange);
+    // Older Safari fallback
+    mq.addListener(handler);
+    return () => mq.removeListener(handler);
   }, [query]);
 
   return matches;
