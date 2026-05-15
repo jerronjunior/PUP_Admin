@@ -13,7 +13,7 @@ const DEFAULT = {
   pointsPerBottle:  1,
   maxBottlesPerDay: 25,
   cooldownSeconds:  20,
-  costPerSpin:      25,
+  spinCost:         25,
   wheelGifts:       ['50 pts', 'Badge', '100 pts', 'Star', '200 pts', 'Crown', '500 pts', 'Gift'],
   bronzePoints:     50,
   silverPoints:     200,
@@ -96,10 +96,10 @@ export default function RewardsPage() {
         <Card icon="🎡" title="Spin Wheel Gifts" isMobile={isMobile}>
           <div style={{ marginBottom: 12 }}>
             <NumberField
-              label="Cost Per Spin (points)"
+              label="Spin Cost (points)"
               icon="💳"
-              value={cfg.costPerSpin}
-              onChange={v => update('costPerSpin', v)} />
+              value={cfg.spinCost}
+              onChange={v => update('spinCost', v)} />
           </div>
           <label style={s.label}>Reward Gifts <span style={s.hint}>(one gift per line)</span></label>
           <textarea
