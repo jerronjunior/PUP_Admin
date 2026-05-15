@@ -202,7 +202,7 @@ function BinModal({ mode, bin, isMobile, onClose }) {
   const [photoPreview,setPhotoPreview]= useState(bin?.photoUrl || '');
   const [existingUrl, setExistingUrl] = useState(bin?.photoUrl || '');
   const [photoErr,    setPhotoErr]    = useState('');
-
+  
   // Location search
   const [searchQ,   setSearchQ]   = useState('');
   const [searching, setSearching] = useState(false);
@@ -222,7 +222,7 @@ function BinModal({ mode, bin, isMobile, onClose }) {
   const prevFrame      = useRef(null);
   const stableCount    = useRef(0);
   const motionSeen     = useRef(false);
-  const fileInputRef   = useRef(null);
+  
 
   const update = (k,v) => setForm(f => ({ ...f, [k]:v }));
 
@@ -342,16 +342,8 @@ function BinModal({ mode, bin, isMobile, onClose }) {
       startDetectionLoop();
     } catch {
       setCamOpen(false);
-      setCamErr('Cannot access camera. Allow permission or upload a photo instead.');
+      setCamErr('Cannot access camera. Allow permission.');
     }
-  };
-
-  const handleFileChange = e => {
-    const file=e.target.files?.[0]; if(!file) return;
-    if(!file.type.startsWith('image/')){ setPhotoErr('Please choose a valid image file.'); return; }
-    if(file.size>8*1024*1024){ setPhotoErr('Image must be 8MB or smaller.'); return; }
-    setPhotoErr(''); setPhotoFile(file);
-    stopCamera(); setCamStatus('📁 Photo selected from file');
   };
 
   // ── Save to Firestore (mirrors fs.addBinLocation / updateBinLocation) ───
@@ -590,10 +582,7 @@ function BinModal({ mode, bin, isMobile, onClose }) {
                     ⏹ Stop Camera
                   </button>
                 )}
-                <button type="button" style={M.uploadBtn}
-                  onClick={()=>fileInputRef.current?.click()}>
-                  📁 Upload Photo
-                </button>
+                {/* Upload removed — camera-only flow */}
               </div>
 
               {camStatus && (
@@ -639,8 +628,7 @@ function BinModal({ mode, bin, isMobile, onClose }) {
                 </div>
               )}
 
-              <input ref={fileInputRef} type="file" accept="image/*"
-                style={{ display:'none' }} onChange={handleFileChange} />
+              {/* file input removed — uploads disabled */}
             </div>
 
             {/* Hidden canvases for motion detection */}
