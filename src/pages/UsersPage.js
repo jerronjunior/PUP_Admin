@@ -1,7 +1,7 @@
 // src/pages/UsersPage.js
 import React, { useEffect, useState } from 'react';
 import { db, auth } from '../firebase';
-import { collection, onSnapshot, doc, updateDoc, deleteDoc, query, orderBy, getDoc } from 'firebase/firestore';
+import { collection, onSnapshot, doc, deleteDoc, query, orderBy, getDoc } from 'firebase/firestore';
 import useMediaQuery from '../hooks/useMediaQuery';
 
 export default function UsersPage() {
@@ -10,9 +10,9 @@ export default function UsersPage() {
   const [users,   setUsers]   = useState([]);
   const [search,  setSearch]  = useState('');
   const [loading, setLoading] = useState(true);
-  const [editing, setEditing] = useState(null);
-  const [editVal, setEditVal] = useState({ pts: '', bottles: '' });
   const [currentIsAdmin, setCurrentIsAdmin] = useState(false);
+  const [deleting, setDeleting] = useState(null);
+  const [deleteMsg, setDeleteMsg] = useState('');
 
   useEffect(() => {
     return onSnapshot(
@@ -42,40 +42,24 @@ export default function UsersPage() {
     (u.email || '').toLowerCase().includes(search.toLowerCase())
   );
 
-  const startEdit = u => {
-    // Prevent editing when current signed-in user is an admin
-    if (currentIsAdmin) { window.alert('Editing users is disabled for administrators.'); return; }
-    // Also prevent editing admin target accounts
-    if (u.isAdmin) { window.alert('Admin accounts cannot be edited.'); return; }
-    setEditing(u.id);
-    setEditVal({ pts: String(u.totalPoints || 0), bottles: String(u.totalBottles || 0) });
-  };
-
-  const saveEdit = async uid => {
-    // Prevent saving edits when current user is admin or target is admin
-    if (currentIsAdmin) { window.alert('Editing users is disabled for administrators.'); setEditing(null); return; }
-    // Prevent saving edits to admin accounts
-    try {
-      const target = await getDoc(doc(db, 'users', uid));
-      if (target.exists() && target.data().isAdmin) { window.alert('Admin accounts cannot be edited.'); setEditing(null); return; }
-      await updateDoc(doc(db, 'users', uid), {
-        totalPoints:  parseInt(editVal.pts, 10)     || 0,
-        totalBottles: parseInt(editVal.bottles, 10) || 0,
-      });
-    } finally {
-      setEditing(null);
-    }
-  };
-
-  // If current user is an admin, ensure editing is cleared and disabled
-  useEffect(() => {
-    if (currentIsAdmin) setEditing(null);
-  }, [currentIsAdmin]);
 
   const handleDelete = async uid => {
-    if (!currentIsAdmin) { window.alert('Only administrators can delete users.'); return; }
-    if (!window.confirm('Delete this user permanently?')) return;
-    await deleteDoc(doc(db, 'users', uid));
+    if (!currentIsAdmin) {
+      window.alert('Only administrators can delete users.');
+      return;
+    }
+    if (!window.confirm('Delete this user permanently? This action cannot be undone.')) return;
+
+    setDeleting(uid);
+    try {
+      await deleteDoc(doc(db, 'users', uid));
+      setDeleteMsg('User deleted successfully.');
+      setTimeout(() => setDeleteMsg(''), 3000);
+    } catch (err) {
+      window.alert('Error deleting user: ' + err.message);
+    } finally {
+      setDeleting(null);
+    }
   };
 
   return (
@@ -86,6 +70,8 @@ export default function UsersPage() {
           <p style={s.sub}>{users.length} registered users</p>
         </div>
       </div>
+
+      {deleteMsg && <div style={s.successBox}>{deleteMsg}</div>}
 
       <input style={s.search} placeholder="🔍  Search by name or email…"
         value={search} onChange={e => setSearch(e.target.value)} />
@@ -112,35 +98,23 @@ export default function UsersPage() {
                 <div style={s.mobileStatsRow}>
                   <div style={s.mobileStatBox}>
                     <div style={s.mobileStatLabel}>Bottles</div>
-                    {editing === u.id
-                      ? <input style={s.editInputMobile} type="number" value={editVal.bottles}
-                          onChange={e => setEditVal(v => ({ ...v, bottles: e.target.value }))} />
-                      : <span style={{ fontWeight: 800, color: '#2E7D32', fontSize: 18 }}>{u.totalBottles || 0}</span>}
+                      <span style={{ fontWeight: 800, color: '#2E7D32', fontSize: 18 }}>{u.totalBottles || 0}</span>
                   </div>
                   <div style={s.mobileStatBox}>
                     <div style={s.mobileStatLabel}>Points</div>
-                    {editing === u.id
-                      ? <input style={s.editInputMobile} type="number" value={editVal.pts}
-                          onChange={e => setEditVal(v => ({ ...v, pts: e.target.value }))} />
-                      : <span style={{ fontWeight: 800, color: '#F57F17', fontSize: 18 }}>{u.totalPoints || 0}</span>}
+                      <span style={{ fontWeight: 800, color: '#F57F17', fontSize: 18 }}>{u.totalPoints || 0}</span>
                   </div>
                 </div>
 
                 <div style={s.mobileActionRow}>
-                  {editing === u.id ? (
-                    <>
-                      <button onClick={() => saveEdit(u.id)} style={s.saveBtnWide}>Save</button>
-                      <button onClick={() => setEditing(null)} style={s.cancelBtnWide}>Cancel</button>
-                    </>
-                  ) : (
-                    <>
-                        {!currentIsAdmin && (
-                          <button onClick={() => startEdit(u)} style={s.editBtnWide}>Edit</button>
-                        )}
-                        {currentIsAdmin && (
-                          <button onClick={() => handleDelete(u.id)} style={s.delBtnWide}>Delete</button>
-                        )}
-                    </>
+                  {currentIsAdmin && (
+                    <button 
+                      onClick={() => handleDelete(u.id)} 
+                      style={s.delBtnWide}
+                      disabled={deleting === u.id}
+                    >
+                      {deleting === u.id ? '⏳ Deleting…' : '🗑️ Delete'}
+                    </button>
                   )}
                 </div>
               </div>
@@ -168,16 +142,10 @@ export default function UsersPage() {
                     <td style={{ ...s.td, color: '#555', fontSize: 13 }}>{u.email}</td>
                     <td style={{ ...s.td, color: '#777', fontSize: 13 }}>{u.mobile || '—'}</td>
                     <td style={{ ...s.td, textAlign: 'center' }}>
-                      {editing === u.id
-                        ? <input style={s.editInput} type="number" value={editVal.bottles}
-                            onChange={e => setEditVal(v => ({ ...v, bottles: e.target.value }))} />
-                        : <span style={{ fontWeight: 700, color: '#2E7D32', fontSize: 16 }}>{u.totalBottles || 0}</span>}
+                        <span style={{ fontWeight: 700, color: '#2E7D32', fontSize: 16 }}>{u.totalBottles || 0}</span>
                     </td>
                     <td style={{ ...s.td, textAlign: 'center' }}>
-                      {editing === u.id
-                        ? <input style={s.editInput} type="number" value={editVal.pts}
-                            onChange={e => setEditVal(v => ({ ...v, pts: e.target.value }))} />
-                        : <span style={{ fontWeight: 700, color: '#F57F17', fontSize: 16 }}>{u.totalPoints || 0}</span>}
+                        <span style={{ fontWeight: 700, color: '#F57F17', fontSize: 16 }}>{u.totalPoints || 0}</span>
                     </td>
                     <td style={{ ...s.td, textAlign: 'center' }}>
                       {u.isAdmin
@@ -186,21 +154,16 @@ export default function UsersPage() {
                     </td>
                     <td style={{ ...s.td }}>
                       <div style={{ display: 'flex', gap: 6 }}>
-                        {editing === u.id ? (
-                          <>
-                            <button onClick={() => saveEdit(u.id)} style={s.saveBtn}>✓</button>
-                            <button onClick={() => setEditing(null)} style={s.cancelBtn}>✕</button>
-                          </>
-                        ) : (
-                          <>
-                            {!currentIsAdmin && (
-                              <button onClick={() => startEdit(u)} style={s.editBtn}>✏️</button>
-                            )}
-                            {currentIsAdmin && (
-                              <button onClick={() => handleDelete(u.id)} style={s.delBtn}>🗑️</button>
-                            )}
-                          </>
-                        )}
+                          {currentIsAdmin && (
+                            <button 
+                              onClick={() => handleDelete(u.id)} 
+                              style={s.delBtn}
+                              disabled={deleting === u.id}
+                              title="Delete this user"
+                            >
+                              {deleting === u.id ? '⏳' : '🗑️'}
+                            </button>
+                          )}
                       </div>
                     </td>
                   </tr>
@@ -238,6 +201,7 @@ const s = {
   tr:         { borderBottom: '1px solid #F9F9F9', transition: 'background .1s' },
   td:         { padding: '12px 16px', verticalAlign: 'middle' },
   userRow:    { display: 'flex', alignItems: 'center', gap: 10 },
+  successBox: { background: '#E8F5E9', color: '#2E7D32', padding: '12px 16px', borderRadius: 9, fontSize: 14, marginBottom: 16, fontWeight: 600 },
   avatar:     { width: 34, height: 34, borderRadius: '50%', background: '#C8E6C9', color: '#2E7D32', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: 14, flexShrink: 0 },
   adminBadge: { background: '#E3F2FD', color: '#1565C0', padding: '3px 9px', borderRadius: 8, fontSize: 11, fontWeight: 700 },
   userBadge:  { background: '#F5F5F5', color: '#777', padding: '3px 9px', borderRadius: 8, fontSize: 11 },
