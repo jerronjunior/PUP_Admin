@@ -12,6 +12,7 @@ import {
 } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import useMediaQuery from '../hooks/useMediaQuery';
+import ScanBinPage from './ScanBinPage';
 
 const FRAME_WIDTH = 96;
 const FRAME_HEIGHT = 72;
@@ -49,6 +50,7 @@ export default function BinsPage() {
   const [autoStatus, setAutoStatus] = useState('Camera idle');
   const [saving,   setSaving]   = useState(false);
   const [deleting, setDeleting] = useState(null);
+  const [scanningBin, setScanningBin] = useState(null);
 
   // Location search (Nominatim — same as OSM/flutter_map, free)
   const [searchQ,   setSearchQ]   = useState('');
@@ -147,6 +149,46 @@ export default function BinsPage() {
     setCameraOpen(false);
   };
 
+  const attachStreamToVideo = async stream => {
+    const video = videoRef.current;
+    if (!video) return;
+
+    video.srcObject = stream;
+
+    if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
+      try {
+        await video.play();
+      } catch {
+        // Some browsers reject play() even when the camera stream is attached.
+      }
+      return;
+    }
+
+    await new Promise(resolve => {
+      let settled = false;
+      const fallbackTimer = setTimeout(onReady, 1500);
+
+      const finish = async () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(fallbackTimer);
+        try {
+          await video.play();
+        } catch {
+          // Ignore autoplay rejections and continue with the attached stream.
+        }
+        resolve();
+      };
+
+      function onReady() {
+        video.removeEventListener('loadeddata', onReady);
+        finish();
+      }
+
+      video.addEventListener('loadeddata', onReady, { once: true });
+    });
+  };
+
   const captureFromCamera = () => {
     const video = videoRef.current;
     const canvas = captureCanvasRef.current;
@@ -161,11 +203,25 @@ export default function BinsPage() {
     canvas.toBlob(blob => {
       if (!blob) return;
       const autoFile = new File([blob], `bin-${Date.now()}.jpg`, { type: 'image/jpeg' });
+      const safeName = autoFile.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+      const imageRef = ref(storage, `bin_photos/${form.binId || 'bin'}-${Date.now()}-${safeName}`);
+
       setPhotoFile(autoFile);
       setPhotoErr('');
       setCameraErr('');
-      setAutoStatus('Captured automatically');
-      stopCamera();
+      setAutoStatus('Uploading scanned photo...');
+
+      uploadBytes(imageRef, autoFile)
+        .then(() => getDownloadURL(imageRef))
+        .then(uploadedPhotoUrl => {
+          setPhotoUrl(uploadedPhotoUrl);
+          setAutoStatus('Captured and added automatically');
+          stopCamera();
+        })
+        .catch(err => {
+          setCameraErr('Failed to upload captured photo: ' + (err.message || 'Unknown error'));
+          setAutoStatus('Capture ready, upload failed');
+        });
     }, 'image/jpeg', 0.9);
   };
 
@@ -244,10 +300,7 @@ export default function BinsPage() {
       streamRef.current = stream;
       setCameraOpen(true);
 
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        await videoRef.current.play();
-      }
+      await attachStreamToVideo(stream);
 
       previousFrameRef.current = null;
       stableCountRef.current = 0;
@@ -266,6 +319,10 @@ export default function BinsPage() {
     setPhotoFile(null); setPhotoUrl(''); setPhotoErr('');
     setCameraErr(''); setAutoStatus('Camera idle');
     setSearchQ(''); setResults([]);
+  };
+
+  const openScan = bin => {
+    setScanningBin({ ...bin, docId: bin.id });
   };
 
   const openEdit = bin => {
@@ -291,6 +348,7 @@ export default function BinsPage() {
     const file = e.target.files?.[0];
     if (!file) {
       setPhotoFile(null);
+      setPhotoUrl('');
       return;
     }
 
@@ -309,6 +367,7 @@ export default function BinsPage() {
 
     setPhotoErr('');
     setPhotoFile(file);
+    setPhotoUrl('');
     stopCamera();
     setAutoStatus('Photo selected');
   };
@@ -326,7 +385,7 @@ export default function BinsPage() {
     try {
       let uploadedPhotoUrl = photoUrl;
 
-      if (photoFile) {
+      if (photoFile && !photoUrl) {
         const safeName = photoFile.name.replace(/[^a-zA-Z0-9._-]/g, '_');
         const imageRef = ref(storage, `bin_photos/${form.binId}-${Date.now()}-${safeName}`);
         await uploadBytes(imageRef, photoFile);
@@ -555,6 +614,7 @@ export default function BinsPage() {
                     </div>
                   </div>
                   <div style={{ ...s.binActions, ...(isMobile ? s.binActionsMobile : {}) }}>
+                    <button onClick={() => openScan(b)} style={s.scanBtn}>📸 Scan</button>
                     <button onClick={() => openEdit(b)} style={s.editBtn}>✏️ Edit</button>
                     <button onClick={() => handleDelete(b.id)} style={s.delBtn}
                       disabled={deleting === b.id}>
@@ -566,6 +626,15 @@ export default function BinsPage() {
             })}
           </div>
         )
+      )}
+
+      {scanningBin && (
+        <ScanBinPage
+          binId={scanningBin.binId}
+          binData={scanningBin}
+          onComplete={() => setScanningBin(null)}
+          onCancel={() => setScanningBin(null)}
+        />
       )}
     </div>
   );
@@ -638,6 +707,7 @@ const s = {
   binCoords:    { fontSize: 12, color: '#888', fontFamily: 'monospace' },
   binActions:   { display: 'flex', gap: 8, flexShrink: 0 },
   binActionsMobile: { width: '100%', justifyContent: 'flex-end' },
+  scanBtn:      { padding: '7px 12px', background: '#E3F2FD', color: '#1565C0', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 12, fontWeight: 700 },
   editBtn:      { padding: '7px 14px', background: '#E3F2FD', color: '#1565C0', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 12, fontWeight: 700 },
   delBtn:       { padding: '7px 12px', background: '#FFEBEE', color: '#C62828', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 14 },
 };
