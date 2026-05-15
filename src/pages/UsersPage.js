@@ -1,7 +1,7 @@
 // src/pages/UsersPage.js
 import React, { useEffect, useState } from 'react';
-import { db } from '../firebase';
-import { collection, onSnapshot, doc, updateDoc, deleteDoc, query, orderBy } from 'firebase/firestore';
+import { db, auth } from '../firebase';
+import { collection, onSnapshot, doc, updateDoc, deleteDoc, query, orderBy, getDoc } from 'firebase/firestore';
 import useMediaQuery from '../hooks/useMediaQuery';
 
 export default function UsersPage() {
@@ -12,6 +12,7 @@ export default function UsersPage() {
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState(null);
   const [editVal, setEditVal] = useState({ pts: '', bottles: '' });
+  const [currentIsAdmin, setCurrentIsAdmin] = useState(false);
 
   useEffect(() => {
     return onSnapshot(
@@ -20,25 +21,59 @@ export default function UsersPage() {
     );
   }, []);
 
+  // Determine whether the currently signed-in user is an admin (from users collection)
+  useEffect(() => {
+    const check = async () => {
+      try {
+        const u = auth.currentUser;
+        if (!u) { setCurrentIsAdmin(false); return; }
+        const docRef = doc(db, 'users', u.uid);
+        const snap = await getDoc(docRef);
+        setCurrentIsAdmin(Boolean(snap.exists() && snap.data().isAdmin));
+      } catch (err) {
+        setCurrentIsAdmin(false);
+      }
+    };
+    check();
+  }, []);
+
   const filtered = users.filter(u =>
     (u.name || '').toLowerCase().includes(search.toLowerCase()) ||
     (u.email || '').toLowerCase().includes(search.toLowerCase())
   );
 
   const startEdit = u => {
+    // Prevent editing when current signed-in user is an admin
+    if (currentIsAdmin) { window.alert('Editing users is disabled for administrators.'); return; }
+    // Also prevent editing admin target accounts
+    if (u.isAdmin) { window.alert('Admin accounts cannot be edited.'); return; }
     setEditing(u.id);
     setEditVal({ pts: String(u.totalPoints || 0), bottles: String(u.totalBottles || 0) });
   };
 
   const saveEdit = async uid => {
-    await updateDoc(doc(db, 'users', uid), {
-      totalPoints:  parseInt(editVal.pts, 10)     || 0,
-      totalBottles: parseInt(editVal.bottles, 10) || 0,
-    });
-    setEditing(null);
+    // Prevent saving edits when current user is admin or target is admin
+    if (currentIsAdmin) { window.alert('Editing users is disabled for administrators.'); setEditing(null); return; }
+    // Prevent saving edits to admin accounts
+    try {
+      const target = await getDoc(doc(db, 'users', uid));
+      if (target.exists() && target.data().isAdmin) { window.alert('Admin accounts cannot be edited.'); setEditing(null); return; }
+      await updateDoc(doc(db, 'users', uid), {
+        totalPoints:  parseInt(editVal.pts, 10)     || 0,
+        totalBottles: parseInt(editVal.bottles, 10) || 0,
+      });
+    } finally {
+      setEditing(null);
+    }
   };
 
+  // If current user is an admin, ensure editing is cleared and disabled
+  useEffect(() => {
+    if (currentIsAdmin) setEditing(null);
+  }, [currentIsAdmin]);
+
   const handleDelete = async uid => {
+    if (!currentIsAdmin) { window.alert('Only administrators can delete users.'); return; }
     if (!window.confirm('Delete this user permanently?')) return;
     await deleteDoc(doc(db, 'users', uid));
   };
@@ -99,8 +134,12 @@ export default function UsersPage() {
                     </>
                   ) : (
                     <>
-                      <button onClick={() => startEdit(u)} style={s.editBtnWide}>Edit</button>
-                      <button onClick={() => handleDelete(u.id)} style={s.delBtnWide}>Delete</button>
+                        {!currentIsAdmin && (
+                          <button onClick={() => startEdit(u)} style={s.editBtnWide}>Edit</button>
+                        )}
+                        {currentIsAdmin && (
+                          <button onClick={() => handleDelete(u.id)} style={s.delBtnWide}>Delete</button>
+                        )}
                     </>
                   )}
                 </div>
@@ -154,8 +193,12 @@ export default function UsersPage() {
                           </>
                         ) : (
                           <>
-                            <button onClick={() => startEdit(u)} style={s.editBtn}>✏️</button>
-                            <button onClick={() => handleDelete(u.id)} style={s.delBtn}>🗑️</button>
+                            {!currentIsAdmin && (
+                              <button onClick={() => startEdit(u)} style={s.editBtn}>✏️</button>
+                            )}
+                            {currentIsAdmin && (
+                              <button onClick={() => handleDelete(u.id)} style={s.delBtn}>🗑️</button>
+                            )}
                           </>
                         )}
                       </div>
