@@ -8,6 +8,7 @@ import {
   getDocs,
   serverTimestamp,
   query,
+  where,
 } from 'firebase/firestore';
 import useMediaQuery from '../hooks/useMediaQuery';
 
@@ -27,16 +28,22 @@ export default function NotificationsPage() {
   const [error, setError] = useState('');
 
   useEffect(() => {
+    // Read admin history from 'notifications' using a special userId to avoid permission issues
     const unsub = onSnapshot(
-      collection(db, 'admin_notifications'),
+      query(collection(db, 'notifications'), where('userId', '==', 'admin_history')),
       snap => {
         const docs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
         docs.sort((a, b) => {
-          const aT = a.createdAt?.toMillis?.() || 0;
-          const bT = b.createdAt?.toMillis?.() || 0;
+          // Use Date.now() for optimistic local writes that don't have a server timestamp yet
+          const aT = a.createdAt?.toMillis?.() || Date.now();
+          const bT = b.createdAt?.toMillis?.() || Date.now();
           return bT - aT;
         });
         setHistory(docs.slice(0, 25));
+      },
+      err => {
+        console.error("onSnapshot error:", err);
+        setError("Error loading history: " + err.message);
       }
     );
 
@@ -88,13 +95,15 @@ export default function NotificationsPage() {
         sentTo = selectedUser?.name || selectedUser?.email || form.userId;
       }
 
-      await addDoc(collection(db, 'admin_notifications'), {
+      // Save history record using special userId 'admin_history' to avoid permission issues
+      await addDoc(collection(db, 'notifications'), {
+        userId: 'admin_history',
         title: form.title,
         subtitle: form.subtitle || '',
         time,
         icon: 'send',
         color: '#1565C0',
-        isRead: false,
+        isRead: true,
         sentTo,
         createdAt: serverTimestamp(),
       });
