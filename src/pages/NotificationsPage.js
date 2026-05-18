@@ -8,8 +8,6 @@ import {
   getDocs,
   serverTimestamp,
   query,
-  orderBy,
-  limit,
 } from 'firebase/firestore';
 import useMediaQuery from '../hooks/useMediaQuery';
 
@@ -30,8 +28,16 @@ export default function NotificationsPage() {
 
   useEffect(() => {
     const unsub = onSnapshot(
-      query(collection(db, 'admin_notifications'), orderBy('createdAt', 'desc'), limit(25)),
-      snap => setHistory(snap.docs.map(d => ({ id: d.id, ...d.data() })))
+      collection(db, 'admin_notifications'),
+      snap => {
+        const docs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+        docs.sort((a, b) => {
+          const aT = a.createdAt?.toMillis?.() || 0;
+          const bT = b.createdAt?.toMillis?.() || 0;
+          return bT - aT;
+        });
+        setHistory(docs.slice(0, 25));
+      }
     );
 
     getDocs(collection(db, 'users')).then(snap =>

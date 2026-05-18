@@ -11,7 +11,7 @@ const firebaseConfig = {
   projectId:         "price-ur-plastic-faab5",
   storageBucket:     "price-ur-plastic-faab5.firebasestorage.app",
   messagingSenderId: "71140175089",
-  appId:             "PASTE_YOUR_WEB_APP_ID_HERE", // Firebase Console → Project Settings → Web app
+  appId:             "1:71140175089:web:8b1293315d4d02d7818d50", // Firebase Console → Project Settings → Web app
 };
 
 const app = initializeApp(firebaseConfig);
