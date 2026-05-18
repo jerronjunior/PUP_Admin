@@ -118,7 +118,20 @@ function ScanBinStep({ onDetected, onCancel }) {
           streakR.current++;setStreak(streakR.current);setCandidate(result);
           const bt=getBT(result),rem=LOCK_FRAMES-streakR.current;
           setStatus(rem>0?`${bt.emoji} ${bt.label} — hold steady (${rem})`:`✅ ${bt.label} confirmed!`);
-          if(streakR.current>=LOCK_FRAMES){clearInterval(timerRef.current);stop();onDetected(result);}
+          if(streakR.current>=LOCK_FRAMES){
+            const v = videoRef.current;
+            const c = document.createElement('canvas');
+            if(v && v.videoWidth) {
+              c.width = v.videoWidth; c.height = v.videoHeight;
+              c.getContext('2d').drawImage(v, 0, 0, c.width, c.height);
+              c.toBlob(blob => {
+                const file = new File([blob], `bin-${Date.now()}.jpg`, {type: 'image/jpeg'});
+                clearInterval(timerRef.current); stop(); onDetected(result, file);
+              }, 'image/jpeg', 0.92);
+            } else {
+              clearInterval(timerRef.current); stop(); onDetected(result, null);
+            }
+          }
         }else{candidateR.current=result;streakR.current=1;setStreak(1);setCandidate(result);setStatus(`${getBT(result).emoji} ${getBT(result).label} — hold steady…`);}
       }else{
         if(streakR.current>0){streakR.current=0;candidateR.current=null;setStreak(0);setCandidate(null);setStatus('🔍 Point camera at the bin…');}
@@ -155,7 +168,7 @@ function ScanBinStep({ onDetected, onCancel }) {
 
   return(
     <div style={M.stepWrap}>
-      <div style={M.stepTitle}>Step 1 of 3 — Scan Bin</div>
+      <div style={M.stepTitle}>Step 1 of 2 — Scan Bin</div>
       <div style={M.stepSub}>Point camera at the recycling bin to detect its type automatically</div>
 
       {/* Status */}
@@ -202,7 +215,9 @@ function ScanBinStep({ onDetected, onCancel }) {
 // STEP 2 — AddBinFormStep (mirrors AddBinScreen)
 // Location search (Nominatim), OSM iframe map, bin name, lat/lng
 // ════════════════════════════════════════════════════════════════════════════
-function AddBinFormStep({ binType, existingBin, onNext, onBack }) {
+function AddBinFormStep({ binType, existingBin, scannedFile, onSaved, onBack }) {
+  const [saving,    setSaving]    = useState(false);
+  const [saveErr,   setSaveErr]   = useState('');
   const [form,      setForm]      = useState({
     binId:        existingBin?.binId        || '',
     locationName: existingBin?.locationName || '',
@@ -241,10 +256,44 @@ function AddBinFormStep({ binType, existingBin, onNext, onBack }) {
     setSearchQ(r.name.split(',').slice(0,2).join(', '));setResults([]);
   };
 
-  const handleSubmit=e=>{
+  const handleSubmit=async e=>{
     e.preventDefault();
     if(!form.binId||!form.locationName||!form.latitude||!form.longitude)return;
-    onNext(form);
+    setSaving(true); setSaveErr('');
+    try {
+      let photoUrl = existingBin?.photoUrl || '';
+      const payload = {
+        binId: form.binId, locationName: form.locationName,
+        binType: form.binType, qrCode: form.qrCode || form.binId,
+        latitude: parseFloat(form.latitude) || 0,
+        longitude: parseFloat(form.longitude) || 0,
+        photoUrl,
+      };
+      
+      let docRef;
+      if (existingBin?.id) {
+        docRef = doc(db, 'bins', existingBin.id);
+        await updateDoc(docRef, payload);
+      } else {
+        docRef = await addDoc(collection(db, 'bins'), { ...payload, createdAt: serverTimestamp() });
+      }
+
+      onSaved(); // Close modal immediately
+
+      // Upload image asynchronously if scanned
+      if (scannedFile) {
+        const r = storageRef(storage, `bin_photos/${form.binId}-${Date.now()}.jpg`);
+        uploadBytes(r, scannedFile)
+          .then(async () => {
+            const dlUrl = await getDownloadURL(r);
+            await updateDoc(docRef, { photoUrl: dlUrl });
+          })
+          .catch(err => console.error("Background upload failed:", err));
+      }
+    } catch (err) {
+      setSaveErr('Save failed: ' + err.message);
+      setSaving(false);
+    }
   };
 
   const mapUrl=form.latitude&&form.longitude
@@ -255,7 +304,9 @@ function AddBinFormStep({ binType, existingBin, onNext, onBack }) {
 
   return(
     <form onSubmit={handleSubmit} style={M.stepWrap}>
-      <div style={M.stepTitle}>Step 2 of 3 — Bin Details</div>
+      <div style={M.stepTitle}>Step 2 of 2 — Bin Details</div>
+
+      {saveErr && <div style={M.errBox}>{saveErr}</div>}
 
       {/* Scanned bin type badge — mirrors widget.scannedBinType card in Flutter */}
       <div style={{...M.scannedBadge,background:bt.color+'15',borderColor:bt.color+'44'}}>
@@ -316,231 +367,23 @@ function AddBinFormStep({ binType, existingBin, onNext, onBack }) {
       <Fld label="QR Code (blank = Bin ID)"><input style={M.inp} value={form.qrCode} onChange={e=>update('qrCode',e.target.value)} placeholder="Optional"/></Fld>
 
       <div style={{display:'flex',gap:10,justifyContent:'flex-end',marginTop:8}}>
-        <button type="button" onClick={onBack} style={M.btnGray}>← Back</button>
-        <button type="submit" style={M.btnGreen}>Next: Capture Photo →</button>
+        <button type="button" onClick={onBack} style={M.btnGray} disabled={saving}>← Back</button>
+        <button type="submit" style={M.btnGreen} disabled={saving}>{saving ? 'Saving…' : '💾 Save Bin'}</button>
       </div>
     </form>
   );
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-// STEP 3 — BinImageStep (mirrors BinImageVerificationScreen)
-// Camera with stability detection, captures bin photo, saves to Firebase
-// ════════════════════════════════════════════════════════════════════════════
-function BinImageStep({ form, existingBin, onSaved, onBack }) {
-  const STABLE_FRAMES = 10;
-  const STABLE_THRESHOLD = 6;
-  const MOTION_THRESHOLD = 20;
-
-  const [phase,     setPhase]     = useState('camera'); // camera|review|saving|saved|error
-  const [status,    setStatus]    = useState('Starting camera…');
-  const [camErr,    setCamErr]    = useState('');
-  const [camReady,  setCamReady]  = useState(false);
-  const [preview,   setPreview]   = useState(existingBin?.photoUrl||null);
-  const [saving,    setSaving]    = useState(false);
-
-  const videoRef    = useRef(null);
-  const detectCv    = useRef(document.createElement('canvas'));
-  const captureCv   = useRef(document.createElement('canvas'));
-  const streamRef   = useRef(null);
-  const timerRef    = useRef(null);
-  const prevFrame   = useRef(null);
-  const stableCount = useRef(0);
-  const motionSeen  = useRef(false);
-  const fileRef     = useRef(null);
-  const startedRef  = useRef(false);
-  const fileInputRef= useRef(null);
-
-  const stop=useCallback(()=>{
-    clearInterval(timerRef.current);timerRef.current=null;
-    if(streamRef.current){streamRef.current.getTracks().forEach(t=>t.stop());streamRef.current=null;}
-    if(videoRef.current)videoRef.current.srcObject=null;
-    setCamReady(false);
-  },[]);
-
-  useEffect(()=>()=>stop(),[stop]);
-
-  const captureNow=useCallback(()=>{
-    const v=videoRef.current,c=captureCv.current;
-    if(!v||!v.videoWidth)return;
-    c.width=v.videoWidth;c.height=v.videoHeight;
-    c.getContext('2d').drawImage(v,0,0,c.width,c.height);
-    c.toBlob(blob=>{
-      stop();
-      const file=new File([blob],`bin-${Date.now()}.jpg`,{type:'image/jpeg'});
-      fileRef.current=file;
-      setPreview(URL.createObjectURL(file));
-      setPhase('review');setStatus('✅ Photo captured! Review and save.');
-    },'image/jpeg',0.92);
-  },[stop]);
-
-  // Stability detection — mirrors _BinImageVerificationScreenState frame analysis
-  const startLoop=useCallback(()=>{
-    clearInterval(timerRef.current);
-    prevFrame.current=null;stableCount.current=0;motionSeen.current=false;
-    timerRef.current=setInterval(()=>{
-      const v=videoRef.current,c=detectCv.current;
-      if(!v||!v.videoWidth)return;
-      c.width=96;c.height=72;
-      const ctx=c.getContext('2d',{willReadFrequently:true});
-      ctx.drawImage(v,0,0,96,72);
-      const frame=ctx.getImageData(0,0,96,72).data;
-      if(!prevFrame.current){prevFrame.current=new Uint8ClampedArray(frame);setStatus('📷 Hold camera steady for auto-capture…');return;}
-      let diff=0;
-      for(let i=0;i<frame.length;i+=4)diff+=(Math.abs(frame[i]-prevFrame.current[i])+Math.abs(frame[i+1]-prevFrame.current[i+1])+Math.abs(frame[i+2]-prevFrame.current[i+2]))/3;
-      prevFrame.current=new Uint8ClampedArray(frame);
-      const avg=diff/(96*72);
-      if(!motionSeen.current&&avg>MOTION_THRESHOLD){motionSeen.current=true;stableCount.current=0;setStatus('📷 Bin detected — hold steady…');return;}
-      if(motionSeen.current){
-        if(avg<STABLE_THRESHOLD){
-          stableCount.current++;
-          const rem=STABLE_FRAMES-stableCount.current;
-          if(rem>0)setStatus(`Hold steady… ${rem}`);
-          if(stableCount.current>=STABLE_FRAMES)captureNow();
-        }else{stableCount.current=0;}
-      }
-    },300);
-  },[captureNow]);
-
-  const startCamera=useCallback(async()=>{
-    if(startedRef.current)return;startedRef.current=true;
-    setCamErr('');setPhase('camera');setCamReady(false);setStatus('Starting camera…');
-    if(!navigator.mediaDevices?.getUserMedia){setCamErr('Camera not supported.');startedRef.current=false;return;}
-    try{
-      const stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'}},audio:false});
-      streamRef.current=stream;
-      const v=videoRef.current;
-      if(!v){stop();setCamErr('Video not ready.');startedRef.current=false;return;}
-      v.srcObject=stream;
-      let a=0;
-      const poll=setInterval(()=>{
-        a++;
-        if(v.videoWidth>0){clearInterval(poll);setCamReady(true);startLoop();}
-        else if(a>30){clearInterval(poll);v.play().then(()=>{setCamReady(true);startLoop();}).catch(()=>{setCamReady(true);startLoop();});}
-      },100);
-    }catch(err){
-      setCamErr(err.name==='NotAllowedError'?'Camera permission denied.':'Camera error: '+err.message);
-      startedRef.current=false;
-    }
-  },[stop,startLoop]);
-
-  // If there's already a photo (edit mode), skip to review
-  useEffect(()=>{
-    if(existingBin?.photoUrl){setPhase('review');return;}
-    const t=setTimeout(()=>startCamera(),100);
-    return()=>clearTimeout(t);
-  },[]);
-
-  const handleFileUpload=e=>{
-    const f=e.target.files?.[0];if(!f)return;
-    if(!f.type.startsWith('image/')){setCamErr('Please choose an image file.');return;}
-    fileRef.current=f;
-    setPreview(URL.createObjectURL(f));
-    stop();setPhase('review');
-  };
-
-  const handleRetake=()=>{
-    setPreview(null);fileRef.current=null;startedRef.current=false;startCamera();
-  };
-
-  const handleSave=async()=>{
-    setSaving(true);
-    try{
-      let photoUrl=existingBin?.photoUrl||'';
-      if(fileRef.current){
-        const r=storageRef(storage,`bin_photos/${form.binId}-${Date.now()}.jpg`);
-        await uploadBytes(r,fileRef.current);
-        photoUrl=await getDownloadURL(r);
-      }
-      const payload={
-        binId:form.binId,locationName:form.locationName,
-        binType:form.binType,qrCode:form.qrCode||form.binId,
-        latitude:parseFloat(form.latitude)||0,
-        longitude:parseFloat(form.longitude)||0,
-        photoUrl,
-      };
-      if(existingBin?.id){
-        await updateDoc(doc(db,'bins',existingBin.id),payload);
-      }else{
-        await addDoc(collection(db,'bins'),{...payload,createdAt:serverTimestamp()});
-      }
-      setPhase('saved');setTimeout(()=>onSaved(),1200);
-    }catch(err){
-      setCamErr('Save failed: '+err.message);setSaving(false);
-    }
-  };
-
-  return(
-    <div style={M.stepWrap}>
-      <div style={M.stepTitle}>Step 3 of 3 — Bin Photo</div>
-      <div style={M.stepSub}>Capture a clear photo of the bin to verify its location</div>
-
-      {/* Video — always in DOM */}
-      <div style={{...M.vidBox,display:phase==='camera'?'block':'none'}}>
-        <video ref={videoRef} autoPlay playsInline muted style={M.vid}/>
-        {!camReady&&<div style={M.vidOverlay}><div style={M.spin}/><span>Opening camera…</span></div>}
-        <div style={{...M.vidStatusBar}}>{status}</div>
-        <div style={{...M.corner,top:10,left:10,borderRight:'none',borderBottom:'none'}}/>
-        <div style={{...M.corner,top:10,right:10,borderLeft:'none',borderBottom:'none'}}/>
-        <div style={{...M.corner,bottom:10,left:10,borderRight:'none',borderTop:'none'}}/>
-        <div style={{...M.corner,bottom:10,right:10,borderLeft:'none',borderTop:'none'}}/>
-      </div>
-
-      {/* Camera controls */}
-      {phase==='camera'&&(
-        <div style={{display:'flex',gap:8,marginTop:6}}>
-          <button type="button" style={{...M.btnGray,flex:1}} onClick={()=>fileInputRef.current?.click()}>📁 Upload instead</button>
-          <button type="button" style={{...M.btnRed}} onClick={()=>{stop();setPhase('review');}}>⏸ Skip Photo</button>
-        </div>
-      )}
-
-      {camErr&&phase==='camera'&&(
-        <div style={M.errBox}>{camErr}
-          <button onClick={()=>{startedRef.current=false;startCamera();}} style={M.retryBtn}>Retry</button>
-        </div>
-      )}
-
-      {/* Photo preview — mirrors captured image in Flutter */}
-      {(phase==='review'||phase==='saving')&&(
-        <div style={{display:'flex',flexDirection:'column',gap:12}}>
-          {preview&&<img src={preview} alt="bin" style={{width:'100%',borderRadius:10,border:'2px solid #e8edf2',maxHeight:240,objectFit:'cover'}}/>}
-          {!preview&&<div style={{...M.mapPlaceholder,height:120}}>No photo — will save without image</div>}
-          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10}}>
-            <button type="button" onClick={handleRetake} style={M.btnGray} disabled={saving}>📷 Retake</button>
-            <button type="button" onClick={handleSave} style={M.btnGreen} disabled={saving}>
-              {saving?'Saving…':'💾 Save Bin'}
-            </button>
-          </div>
-          {camErr&&<div style={M.errBox}>{camErr}</div>}
-        </div>
-      )}
-
-      {phase==='saved'&&(
-        <div style={M.centerBox}>
-          <div style={{fontSize:60}}>✅</div>
-          <div style={{fontSize:18,fontWeight:800,color:'#1B5E20',margin:'10px 0 4px'}}>Bin Saved!</div>
-        </div>
-      )}
-
-      {phase!=='saved'&&<div style={{display:'flex',justifyContent:'flex-start',marginTop:8}}>
-        <button type="button" onClick={onBack} style={M.btnGray}>← Back</button>
-      </div>}
-
-      <input ref={fileInputRef} type="file" accept="image/*" style={{display:'none'}} onChange={handleFileUpload}/>
-    </div>
-  );
-}
-
-// ════════════════════════════════════════════════════════════════════════════
-// MODAL — wraps the 3-step flow
+// MODAL — wraps the flow
 // ════════════════════════════════════════════════════════════════════════════
 function BinModal({ mode, bin, isMobile, onClose }) {
   // Edit mode → skip scan, start at form
-  const [step,     setStep]     = useState(mode==='edit'?'form':'scan');
-  const [binType,  setBinType]  = useState(bin?.binType||null);
-  const [formData, setFormData] = useState(null);
+  const [step,        setStep]        = useState(mode==='edit'?'form':'scan');
+  const [binType,     setBinType]     = useState(bin?.binType||null);
+  const [scannedFile, setScannedFile] = useState(null);
 
-  const steps = { scan:1, form:2, image:3 };
+  const steps = { scan: 1, form: 2 };
 
   return(
     <div style={V.overlay} onClick={onClose}>
@@ -553,7 +396,7 @@ function BinModal({ mode, bin, isMobile, onClose }) {
               {mode==='edit'?'✏️ Edit Bin':'📍 Add New Bin'}
             </h2>
             <div style={V.stepDots}>
-              {mode==='add'&&[1,2,3].map(n=>(
+              {mode==='add'&&[1,2].map(n=>(
                 <div key={n} style={{...V.dot,background:steps[step]>=n?'#2E7D32':'#ddd'}}/>
               ))}
             </div>
@@ -565,22 +408,16 @@ function BinModal({ mode, bin, isMobile, onClose }) {
         <div style={{...V.body,paddingBottom:isMobile?110:24}}>
           {step==='scan'&&(
             <ScanBinStep
-              onDetected={t=>{setBinType(t);setStep('form');}}
+              onDetected={(t, file)=>{setBinType(t);setScannedFile(file);setStep('form');}}
               onCancel={onClose}/>
           )}
           {step==='form'&&(
             <AddBinFormStep
               binType={binType}
               existingBin={bin}
-              onNext={f=>{setFormData(f);setStep('image');}}
-              onBack={()=>mode==='add'?setStep('scan'):onClose()}/>
-          )}
-          {step==='image'&&(
-            <BinImageStep
-              form={formData}
-              existingBin={bin}
+              scannedFile={scannedFile}
               onSaved={onClose}
-              onBack={()=>setStep('form')}/>
+              onBack={()=>mode==='add'?setStep('scan'):onClose()}/>
           )}
         </div>
       </div>
