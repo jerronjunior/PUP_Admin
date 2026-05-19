@@ -20,13 +20,9 @@ const MIN_HEIGHT  = 0.30;
 const MAX_ASPECT  = 1.8;
 const MIN_QUADS   = 3;
 
-// ── Bin types ─────────────────────────────────────────────────────────────
-const BIN_TYPES = [
-  { value: 'coca_cola',    label: 'Coca-Cola Give Back Life', emoji: '🔴', color: '#E53935' },
-  { value: 'cargills',     label: 'Cargills Food City',       emoji: '🔴', color: '#C62828' },
-  { value: 'keells',       label: 'Keells Plasticcycle',      emoji: '🟢', color: '#2E7D32' },
-  { value: 'eco_spindles', label: 'Eco Spindles',             emoji: '🟣', color: '#6A1B9A' },
-];
+// ── Bin types (generic) ─────────────────────────────────────────────────
+// We only detect a generic recycling bin (no brand categorization).
+const BIN_TYPES = [ { value: 'bin', label: 'Recycling Bin', emoji: '🗑️', color: '#2E7D32' } ];
 const getBinType = v => BIN_TYPES.find(t => t.value === v);
 
 // ── RGB → YUV (same formulas as Flutter's YUV420 plane values) ────────────
@@ -40,9 +36,11 @@ function rgbToYuv(r, g, b) {
 
 // ── Classify one grid cell ─────────────────────────────────────────────────
 function classifyCell(Y, U, V) {
-  if (Y >= 40 && Y <= 130 && V >= 150 && V <= 220 && U >= 70  && U <= 122) return 'coca_cola';
-  if (Y >= 40 && Y <= 145 && V >= 80  && V <= 132 && U >= 132 && U <= 195) return 'keells';
-  if (Y >= 18 && Y <= 90  && V >= 102 && V <= 140 && U >= 122 && U <= 165) return 'eco_spindles';
+  // If the pixel falls inside any of the previously-tuned color ranges
+  // treat it as part of a generic recycling `bin` (no brand labels).
+  if (Y >= 40 && Y <= 130 && V >= 150 && V <= 220 && U >= 70  && U <= 122) return 'bin';
+  if (Y >= 40 && Y <= 145 && V >= 80  && V <= 132 && U >= 132 && U <= 195) return 'bin';
+  if (Y >= 18 && Y <= 90  && V >= 102 && V <= 140 && U >= 122 && U <= 165) return 'bin';
   return null;
 }
 
@@ -59,7 +57,7 @@ function detectBinInFrame(canvas, video) {
   const cellW = Math.floor(fw / COLS);
   const cellH = Math.floor(fh / ROWS);
   const cells = new Array(COLS * ROWS).fill(null);
-  const counts = { coca_cola: 0, keells: 0, eco_spindles: 0 };
+  const counts = { bin: 0 };
 
   for (let row = 0; row < ROWS; row++) {
     for (let col = 0; col < COLS; col++) {
@@ -364,20 +362,9 @@ export default function ScanBinPage({ binId, binData, onComplete, onCancel }) {
 
               <button type="button" onClick={stopCamera} style={S.stopBtn}>⏸ Stop Camera</button>
             <div style={S.infoBox}>
-              <div style={S.infoLabel}>Detects these bins automatically:</div>
-              <div style={S.infoGrid}>
-                {BIN_TYPES.map(t => (
-                  <div key={t.value} style={{
-                    ...S.infoItem,
-                    background:  candidateRef.current === t.value ? t.color + '20' : 'transparent',
-                    borderColor: candidateRef.current === t.value ? t.color : '#eee',
-                  }}>
-                    <span style={{ fontSize: 18 }}>{t.emoji}</span>
-                    <span style={{ fontSize: 10, color: '#555', textAlign: 'center', lineHeight: 1.2 }}>
-                      {t.label.split(' ')[0]}
-                    </span>
-                  </div>
-                ))}
+              <div style={S.infoLabel}>Detects recycling bins automatically</div>
+              <div style={{ fontSize: 13, color: '#556', marginTop: 6 }}>
+                Hold the camera steady in front of the bin until detection locks.
               </div>
             </div>
 
@@ -458,11 +445,11 @@ export default function ScanBinPage({ binId, binData, onComplete, onCancel }) {
         </div>
 
         {/* Footer */}
-        <div style={S.footer}>
+          <div style={S.footer}>
           <p style={S.hint}>
             {phase === 'review'
               ? 'Review photo and bin type. Tap Save to confirm.'
-              : 'Point camera at bin. Auto-detects 🔴 Coca-Cola/Cargills • 🟢 Keells • 🟣 Eco Spindles'}
+              : 'Point camera at the recycling bin. Auto-detects generic bin.'}
           </p>
         </div>
       </div>
