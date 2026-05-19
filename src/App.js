@@ -142,7 +142,7 @@ export default function App() {
             </button>
             <div style={{ ...s.mobileHeaderTitle, ...(isTinyMobile ? s.mobileHeaderTitleTiny : {}) }}>RecycleScan Admin</div>
             <button onClick={handleSignOut} style={s.mobileSignOutBtn} title="Sign out" aria-label="Sign out">
-              Logout
+              ⏻
             </button>
           </header>
 
@@ -232,7 +232,7 @@ const s = {
   mobileHeaderTitle:{ flex: 1, minWidth: 0, textAlign: 'center', fontSize: 16, fontWeight: 800, color: '#1B5E20', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
   mobileHeaderTitleTiny: { fontSize: 14 },
   menuBtn:    { background: '#f2f7f3', border: '1px solid #dfe8e2', color: '#1B5E20', width: 36, height: 36, borderRadius: 8, cursor: 'pointer', fontSize: 18, lineHeight: 1, flexShrink: 0 },
-  mobileSignOutBtn:{ background: '#a42f2f', border: '1px solid #8f2626', color: '#fff', minWidth: 72, height: 36, padding: '0 10px', borderRadius: 8, cursor: 'pointer', fontSize: 12, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
+  mobileSignOutBtn:{ background: '#a42f2f', border: '1px solid #8f2626', color: '#fff', width: 40, height: 40, borderRadius: 10, cursor: 'pointer', fontSize: 18, fontWeight: 700, lineHeight: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, boxShadow: '0 2px 8px rgba(164,47,47,.25)' },
   mobileOverlay:{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.3)', zIndex: 1200 },
   mobileDrawer:{ position: 'fixed', top: 0, left: 0, width: '80%', maxWidth: 320, height: '100dvh', zIndex: 1300, boxShadow: '4px 0 18px rgba(0,0,0,.25)' },
   mainMobile: { padding: '14px 12px 90px' },
