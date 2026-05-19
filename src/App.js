@@ -141,7 +141,9 @@ export default function App() {
               ☰
             </button>
             <div style={{ ...s.mobileHeaderTitle, ...(isTinyMobile ? s.mobileHeaderTitleTiny : {}) }}>RecycleScan Admin</div>
-            <button onClick={handleSignOut} style={s.mobileSignOutBtn} title="Sign out">⏻</button>
+            <button onClick={handleSignOut} style={s.mobileSignOutBtn} title="Sign out" aria-label="Sign out">
+              Logout
+            </button>
           </header>
 
           {mobileNavOpen && <div style={s.mobileOverlay} onClick={() => setMobileNavOpen(false)} />}
@@ -225,12 +227,12 @@ const s = {
   signOutBtn: { background: 'rgba(255,255,255,.12)', border: 'none', color: '#fff', width: 28, height: 28, borderRadius: 6, cursor: 'pointer', fontSize: 14, display: 'flex', alignItems: 'center', justifyContent: 'center' },
   main:       { flex: 1, overflow: 'auto', padding: '28px 32px' },
   mobileLayout:{ minHeight: '100vh', background: '#F0F4F8', fontFamily: "'Inter', system-ui, sans-serif" },
-  mobileHeader:{ position: 'sticky', top: 0, zIndex: 1100, display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 14px', background: '#fff', borderBottom: '1px solid #e8edf2' },
+  mobileHeader:{ position: 'sticky', top: 0, zIndex: 1100, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, padding: '12px 14px', background: '#fff', borderBottom: '1px solid #e8edf2' },
   mobileHeaderTiny: { padding: '10px 10px' },
-  mobileHeaderTitle:{ fontSize: 16, fontWeight: 800, color: '#1B5E20' },
+  mobileHeaderTitle:{ flex: 1, minWidth: 0, textAlign: 'center', fontSize: 16, fontWeight: 800, color: '#1B5E20', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
   mobileHeaderTitleTiny: { fontSize: 14 },
-  menuBtn:    { background: '#f2f7f3', border: '1px solid #dfe8e2', color: '#1B5E20', width: 36, height: 36, borderRadius: 8, cursor: 'pointer', fontSize: 18, lineHeight: 1 },
-  mobileSignOutBtn:{ background: '#f9f1f1', border: '1px solid #f0dede', color: '#a42f2f', width: 36, height: 36, borderRadius: 8, cursor: 'pointer', fontSize: 14, display: 'flex', alignItems: 'center', justifyContent: 'center' },
+  menuBtn:    { background: '#f2f7f3', border: '1px solid #dfe8e2', color: '#1B5E20', width: 36, height: 36, borderRadius: 8, cursor: 'pointer', fontSize: 18, lineHeight: 1, flexShrink: 0 },
+  mobileSignOutBtn:{ background: '#a42f2f', border: '1px solid #8f2626', color: '#fff', minWidth: 72, height: 36, padding: '0 10px', borderRadius: 8, cursor: 'pointer', fontSize: 12, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
   mobileOverlay:{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.3)', zIndex: 1200 },
   mobileDrawer:{ position: 'fixed', top: 0, left: 0, width: '80%', maxWidth: 320, height: '100dvh', zIndex: 1300, boxShadow: '4px 0 18px rgba(0,0,0,.25)' },
   mainMobile: { padding: '14px 12px 90px' },
