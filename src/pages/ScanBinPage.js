@@ -90,35 +90,51 @@ export default function ScanBinPage({ binId, binData, onComplete, onCancel }) {
             (async () => {
               setStatus('Verifying with model…');
               const v = videoRef.current, c = detectCanvas.current;
-              let ok = false;
+              let verified = false;
+              let verificationAttempted = false;
+
               try {
-                // attempt client prediction
+                await loadClientModel();
                 const score = await predictCanvas(c, 224);
-                if (score !== null && score >= 0.8) ok = true;
-                // if no client model or low score, try server if configured
-                if (!ok && process.env.REACT_APP_BIN_DETECTOR_URL) {
-                  // take a snapshot blob
+                if (score !== null) {
+                  verificationAttempted = true;
+                  verified = score >= 0.8;
+                }
+
+                if (!verified && process.env.REACT_APP_BIN_DETECTOR_URL) {
                   const snap = document.createElement('canvas'); snap.width = v.videoWidth; snap.height = v.videoHeight;
                   snap.getContext('2d').drawImage(v, 0, 0, snap.width, snap.height);
                   const blob = await new Promise(r => snap.toBlob(r, 'image/jpeg', 0.9));
                   const serverScore = await predictBlobViaServer(blob, process.env.REACT_APP_BIN_DETECTOR_URL + '/detect');
-                  if (serverScore !== null && serverScore >= 0.8) ok = true;
+                  if (serverScore !== null) {
+                    verificationAttempted = true;
+                    verified = serverScore >= 0.8;
+                  }
                 }
               } catch (e) {
                 console.warn(e);
               }
 
-              if (ok) {
+              if (verified) {
                 setDetectedType(result);
                 setStatus(`✅ ${bt.label} confirmed!`);
                 clearInterval(intervalRef.current);
                 intervalRef.current = null;
                 capturePhoto();
-              } else {
-                // reject and reset streak
-                streakRef.current = 0; candidateRef.current = null; setLockStreak(0);
-                setStatus('Verification failed — try again with a real bin.');
+                return;
               }
+
+              if (!verificationAttempted) {
+                setStatus('Model not installed yet — using live detector.');
+                setDetectedType(result);
+                clearInterval(intervalRef.current);
+                intervalRef.current = null;
+                capturePhoto();
+                return;
+              }
+
+              streakRef.current = 0; candidateRef.current = null; setLockStreak(0);
+              setStatus('Validation failed — try again with a real bin.');
             })();
           }
         } else {

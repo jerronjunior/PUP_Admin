@@ -23,6 +23,7 @@ import { ref as storageRef, uploadBytes, getDownloadURL } from 'firebase/storage
 import useMediaQuery from '../hooks/useMediaQuery';
 
 import { COLS, ROWS, LOCK_FRAMES, MIN_COVER, MIN_HEIGHT, MAX_ASPECT, MIN_QUADS, rgbToYuv, classifyCell, detectBinInFrame } from '../lib/binDetectionModel';
+import { loadClientModel, predictCanvas, predictBlobViaServer } from '../lib/binModelClient';
 
 const BIN_TYPE = { value:'bin', label:'Recycling Bin', emoji:'♻️', color:'#2E7D32' };
 const getBT = () => BIN_TYPE;
@@ -69,19 +70,40 @@ function ScanBinStep({ onDetected, onCancel }) {
           (async ()=>{
             setStatus('Verifying with model…');
             const v = videoRef.current;
-            let ok = false;
+            let verified = false;
+            let verificationAttempted = false;
             try{
               const c = document.createElement('canvas'); c.width=v.videoWidth; c.height=v.videoHeight; c.getContext('2d').drawImage(v,0,0,c.width,c.height);
-              const { predictCanvas, predictBlobViaServer } = await import('../lib/binModelClient');
+              await loadClientModel();
               const score = await predictCanvas(c,224);
-              if(score!==null && score>=0.8) ok=true;
-              if(!ok && process.env.REACT_APP_BIN_DETECTOR_URL){
+              if(score!==null){
+                verificationAttempted = true;
+                verified = score>=0.8;
+              }
+              if(!verified && process.env.REACT_APP_BIN_DETECTOR_URL){
                 const blob = await new Promise(r=>c.toBlob(r,'image/jpeg',0.9));
                 const s = await predictBlobViaServer(blob, process.env.REACT_APP_BIN_DETECTOR_URL + '/detect');
-                if(s!==null && s>=0.8) ok=true;
+                if(s!==null){
+                  verificationAttempted = true;
+                  verified = s>=0.8;
+                }
               }
             }catch(e){console.warn(e)}
-            if(ok){
+            if(verified){
+              const v = videoRef.current;
+              const c = document.createElement('canvas');
+              if(v && v.videoWidth) {
+                c.width = v.videoWidth; c.height = v.videoHeight;
+                c.getContext('2d').drawImage(v, 0, 0, c.width, c.height);
+                c.toBlob(blob => {
+                  const file = new File([blob], `bin-${Date.now()}.jpg`, {type: 'image/jpeg'});
+                  clearInterval(timerRef.current); stop(); onDetected('bin', file);
+                }, 'image/jpeg', 0.92);
+              } else {
+                clearInterval(timerRef.current); stop(); onDetected('bin', null);
+              }
+            } else if(!verificationAttempted){
+              setStatus('Model not installed yet — using live detector.');
               const v = videoRef.current;
               const c = document.createElement('canvas');
               if(v && v.videoWidth) {
@@ -95,7 +117,7 @@ function ScanBinStep({ onDetected, onCancel }) {
                 clearInterval(timerRef.current); stop(); onDetected('bin', null);
               }
             } else {
-              streakR.current=0; setStreak(0); setStatus('Verification failed — try again with a real bin.');
+              streakR.current=0; setStreak(0); setStatus('Validation failed — try again with a real bin.');
             }
           })();
         }

@@ -5,10 +5,46 @@
 let tf = null;
 let model = null;
 
+function loadScript(src) {
+  return new Promise((resolve, reject) => {
+    const existing = document.querySelector(`script[data-tfjs="true"]`);
+    if (existing && window.tf) {
+      resolve(window.tf);
+      return;
+    }
+
+    const script = document.createElement('script');
+    script.src = src;
+    script.async = true;
+    script.dataset.tfjs = 'true';
+    script.onload = () => resolve(window.tf || null);
+    script.onerror = () => reject(new Error(`Failed to load TF.js from ${src}`));
+    document.head.appendChild(script);
+  });
+}
+
+async function ensureTf() {
+  if (tf) return tf;
+  if (typeof window === 'undefined') return null;
+  if (window.tf) {
+    tf = window.tf;
+    return tf;
+  }
+
+  try {
+    tf = await loadScript('https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js');
+    return tf;
+  } catch (err) {
+    console.warn('TF.js load failed:', err.message || err);
+    return null;
+  }
+}
+
 export async function loadClientModel(modelUrl = '/models/bin-model/model.json') {
   if (model) return model;
   try {
-    if (!tf) tf = await import('@tensorflow/tfjs');
+    if (!tf) tf = await ensureTf();
+    if (!tf) return null;
     model = await tf.loadLayersModel(modelUrl);
     return model;
   } catch (err) {
