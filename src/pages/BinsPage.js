@@ -1,496 +1,465 @@
-// src/pages/BinsPage.js
-// ─────────────────────────────────────────────────────────────────────────────
-// Mirrors all Flutter admin bin screens:
-//
-// FLOW (add new bin):
-//   Step 1 → ScanBinScreen   — camera detects bin color/type (YUV analysis)
-//   Step 2 → AddBinScreen    — location search + OSM map + name + lat/lng
-//   Step 3 → BinImageVerificationScreen — camera captures bin photo
-//
-// FLOW (edit existing bin):
-//   → AddBinScreen directly (skip scan step)
-//
-// Manage Bins list:
-//   → Live Firestore stream, edit/delete with confirm dialog
-// ─────────────────────────────────────────────────────────────────────────────
+// src/pages/ScanBinPage.js
 import React, { useEffect, useState, useRef, useCallback } from 'react';
-import { db, storage, auth } from '../firebase';
-import {
-  collection, onSnapshot, addDoc, updateDoc, deleteDoc,
-  doc, serverTimestamp, query, orderBy,
-} from 'firebase/firestore';
-import { ref as storageRef, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { db, storage } from '../firebase';
+import { doc, updateDoc } from 'firebase/firestore';
+import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import useMediaQuery from '../hooks/useMediaQuery';
 
-import { COLS, ROWS, LOCK_FRAMES, MIN_COVER, MIN_HEIGHT, MAX_ASPECT, MIN_QUADS, rgbToYuv, classifyCell, detectBinInFrame } from '../lib/binDetectionModel';
+// ── Detection constants — calibrated from 78 real Sri Lankan bin images ───
+const COLS            = 16;
+const ROWS            = 12;
+const LOCK_FRAMES     = 15;
+const MIN_COVER       = 0.22;
+const MIN_HEIGHT      = 0.35;
+const MAX_ASPECT      = 1.8;
+const MIN_QUADS       = 4;
+const MIN_TEXTURE_STD = 12;   // anti-spoof: screens <3, real bins >12
 
-const BIN_TYPE = { value:'bin', label:'Recycling Bin', emoji:'♻️', color:'#2E7D32' };
-const getBT = () => BIN_TYPE;
+// ── Bin types ─────────────────────────────────────────────────────────────
+const BIN_TYPES = [
+  { value: 'bin', label: 'Recycling Bin', emoji: '🗑️', color: '#2E7D32' },
+];
+const getBinType = v => BIN_TYPES.find(t => t.value === v);
 
-// ════════════════════════════════════════════════════════════════════════════
-// STEP 1 — ScanBinStep (mirrors ScanBinScreen + AdminAddBinFlowScreen Step 1)
-// Camera opens, scans for bin color, locks after 8 frames, auto-proceeds
-// ════════════════════════════════════════════════════════════════════════════
-function ScanBinStep({ onDetected, onCancel }) {
-  const [status,    setStatus]    = useState('Starting camera…');
-  const [camErr,    setCamErr]    = useState('');
-  const [streak,    setStreak]    = useState(0);
-  const [camReady,  setCamReady]  = useState(false);
-
-  const videoRef    = useRef(null);
-  const canvasRef   = useRef(document.createElement('canvas'));
-  const streamRef   = useRef(null);
-  const timerRef    = useRef(null);
-  const streakR     = useRef(0);
-  const startedRef  = useRef(false);
-
-  const stop = useCallback(()=>{
-    clearInterval(timerRef.current);timerRef.current=null;
-    if(streamRef.current){streamRef.current.getTracks().forEach(t=>t.stop());streamRef.current=null;}
-    if(videoRef.current)videoRef.current.srcObject=null;
-    setCamReady(false);
-  },[]);
-
-  useEffect(()=>()=>stop(),[stop]);
-
-  const startLoop = useCallback(()=>{
-    clearInterval(timerRef.current);
-    streakR.current=0;
-    timerRef.current=setInterval(()=>{
-      const v=videoRef.current,c=canvasRef.current;
-      if(!v||!v.videoWidth)return;
-      const result=detectBinInFrame(c,v);
-      if(result){
-        streakR.current++;setStreak(streakR.current);
-        const rem=LOCK_FRAMES-streakR.current;
-        setStatus(rem>0?`♻️ Bin detected — hold steady (${rem})`:'✅ Bin confirmed!');
-        if(streakR.current>=LOCK_FRAMES){
-          const v = videoRef.current;
-          const c = document.createElement('canvas');
-          if(v && v.videoWidth) {
-            c.width = v.videoWidth; c.height = v.videoHeight;
-            c.getContext('2d').drawImage(v, 0, 0, c.width, c.height);
-            c.toBlob(blob => {
-              const file = new File([blob], `bin-${Date.now()}.jpg`, {type: 'image/jpeg'});
-              clearInterval(timerRef.current); stop(); onDetected('bin', file);
-            }, 'image/jpeg', 0.92);
-          } else {
-            clearInterval(timerRef.current); stop(); onDetected('bin', null);
-          }
-        }
-      }else{
-        if(streakR.current>0){
-          streakR.current=0;
-          setStreak(0);
-          setStatus('🔍 Point camera at the bin…');
-        }
-      }
-    },350);
-  },[stop,onDetected]);
-
-  const startCamera=useCallback(async()=>{
-    if(startedRef.current)return;startedRef.current=true;
-    setCamErr('');setStatus('Starting camera…');setCamReady(false);
-    if(!navigator.mediaDevices?.getUserMedia){setCamErr('Camera not supported.');startedRef.current=false;return;}
-    try{
-      const stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'}},audio:false});
-      streamRef.current=stream;
-      const v=videoRef.current;
-      if(!v){stop();setCamErr('Video not ready.');startedRef.current=false;return;}
-      v.srcObject=stream;
-      let attempts=0;
-      const poll=setInterval(()=>{
-        attempts++;
-        if(v.videoWidth>0){clearInterval(poll);setCamReady(true);setStatus('🔍 Point camera at the bin…');startLoop();}
-        else if(attempts>30){clearInterval(poll);v.play().then(()=>{setCamReady(true);startLoop();}).catch(()=>{setCamReady(true);startLoop();});}
-      },100);
-    }catch(err){
-      const msg=err.name==='NotAllowedError'?'Camera permission denied.':err.name==='NotFoundError'?'No camera found.':'Camera error: '+err.message;
-      setCamErr(msg);startedRef.current=false;
-    }
-  },[stop,startLoop]);
-
-  useEffect(()=>{const t=setTimeout(()=>startCamera(),100);return()=>clearTimeout(t);},[]);
-
-  const pct=Math.min(100,(streak/LOCK_FRAMES)*100);
-
-  return(
-    <div style={M.stepWrap}>
-      <div style={M.stepTitle}>Step 1 of 2 — Scan Bin</div>
-      <div style={M.stepSub}>Point camera at the recycling bin to detect it automatically</div>
-
-      {/* Status */}
-      <div style={{...M.statusPill,background:'#f1f8e9',color:'#2E7D32',borderColor:'#c8e6c9'}}>
-        {status}
-      </div>
-
-      {/* Progress */}
-      {streak>0&&streak<LOCK_FRAMES&&(
-        <div style={M.progWrap}><div style={{...M.progBar,width:pct+'%',background:'#2E7D32'}}/></div>
-      )}
-
-      {/* Video */}
-      <div style={M.vidBox}>
-        <video ref={videoRef} autoPlay playsInline muted style={M.vid}/>
-        {!camReady&&<div style={M.vidOverlay}><div style={M.spin}/><span>Opening camera…</span></div>}
-        <div style={{...M.corner,top:10,left:10,borderRight:'none',borderBottom:'none'}}/>
-        <div style={{...M.corner,top:10,right:10,borderLeft:'none',borderBottom:'none'}}/>
-        <div style={{...M.corner,bottom:10,left:10,borderRight:'none',borderTop:'none'}}/>
-        <div style={{...M.corner,bottom:10,right:10,borderLeft:'none',borderTop:'none'}}/>
-      </div>
-
-      {camErr&&<div style={M.errBox}>{camErr}<button onClick={()=>{startedRef.current=false;startCamera();}} style={M.retryBtn}>Retry</button></div>}
-
-      <div style={M.hint}>Hold the camera steady in front of the bin for auto-capture.</div>
-    </div>
-  );
+// ── RGB → YUV — returns R,G,B too for Stage 1 pre-filter ──────────────────
+function rgbToYuv(r, g, b) {
+  return {
+    Y:  0.299 * r + 0.587 * g + 0.114 * b,
+    U: -0.169 * r - 0.331 * g + 0.500 * b + 128,
+    V:  0.500 * r - 0.419 * g - 0.081 * b + 128,
+    R: r, G: g, B: b,
+  };
 }
 
-// ════════════════════════════════════════════════════════════════════════════
-// STEP 2 — AddBinFormStep (mirrors AddBinScreen)
-// Location search (Nominatim), OSM iframe map, bin name, lat/lng
-// ════════════════════════════════════════════════════════════════════════════
-function AddBinFormStep({ binType, existingBin, scannedFile, onSaved, onBack }) {
-  const [saving,    setSaving]    = useState(false);
-  const [saveErr,   setSaveErr]   = useState('');
-  const [form,      setForm]      = useState({
-    binId:        existingBin?.binId        || '',
-    locationName: existingBin?.locationName || '',
-    latitude:     existingBin?.latitude!=null?String(existingBin.latitude):'',
-    longitude:    existingBin?.longitude!=null?String(existingBin.longitude):'',
-    qrCode:       existingBin?.qrCode       || '',
-    binType:      existingBin?.binType      || binType || 'bin',
+// ── classifyCell — TWO-STAGE FILTER ───────────────────────────────────────
+function classifyCell(Y, U, V, R, G, B) {
+  const isGreenDominant = G > R * 1.30 && G > B * 1.05 && G > 75;
+  const isRedDominant   = R > G * 1.40 && R > B * 1.50 && R > 80;
+  const isPurplish      = R > G * 0.90 && B > G * 0.90 && R < 130 && Y < 90;
+
+  if (!isGreenDominant && !isRedDominant && !isPurplish) return null;
+
+  if (isRedDominant &&
+      Y >= 39 && Y <= 144 && U >= 101 && U <= 124 && V >= 137 && V <= 197)
+    return 'bin';
+
+  if (isGreenDominant &&
+      Y >= 40 && Y <= 145 && U >= 112 && U <= 134 && V >= 88  && V <= 125)
+    return 'bin';
+
+  if (isPurplish &&
+      Y >= 18 && Y <= 90  && U >= 118 && U <= 160 && V >= 108 && V <= 145)
+    return 'bin';
+
+  return null;
+}
+
+// ── detectBinInFrame ───────────────────────────────────────────────────────
+function detectBinInFrame(canvas, video) {
+  const fw = video.videoWidth, fh = video.videoHeight;
+  if (!fw || !fh) return null;
+
+  canvas.width = fw; canvas.height = fh;
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  ctx.drawImage(video, 0, 0, fw, fh);
+  const { data } = ctx.getImageData(0, 0, fw, fh);
+
+  const cellW = Math.floor(fw / COLS);
+  const cellH = Math.floor(fh / ROWS);
+  const cells = new Array(COLS * ROWS).fill(null);
+  const counts = { bin: 0, _std: 0 };
+
+  for (let row = 0; row < ROWS; row++) {
+    for (let col = 0; col < COLS; col++) {
+      const x0 = col * cellW, y0 = row * cellH;
+      let sumY=0, sumU=0, sumV=0, sumR=0, sumG=0, sumB=0, sumY2=0, cnt=0;
+      for (let py = y0; py < Math.min(y0 + cellH, fh); py += 5) {
+        for (let px = x0; px < Math.min(x0 + cellW, fw); px += 5) {
+          const i = (py * fw + px) * 4;
+          const yuv = rgbToYuv(data[i], data[i+1], data[i+2]);
+          sumY+=yuv.Y; sumU+=yuv.U; sumV+=yuv.V;
+          sumR+=yuv.R; sumG+=yuv.G; sumB+=yuv.B;
+          sumY2+=yuv.Y*yuv.Y; cnt++;
+        }
+      }
+      if (!cnt) continue;
+      const c = classifyCell(sumY/cnt, sumU/cnt, sumV/cnt, sumR/cnt, sumG/cnt, sumB/cnt);
+      const cellStd = cnt > 1 ? Math.sqrt(Math.max(0, sumY2/cnt - (sumY/cnt)*(sumY/cnt))) : 0;
+      cells[row * COLS + col] = c;
+      if (c) { counts[c]++; counts._std += cellStd; }
+    }
+  }
+
+  let dominant = null, domCount = 0;
+  for (const [t, n] of Object.entries(counts)) {
+    if (t.startsWith('_')) continue;
+    if (n > domCount) { dominant = t; domCount = n; }
+  }
+
+  if (!dominant || domCount / (COLS * ROWS) < MIN_COVER) return null;
+
+  // Anti-spoof: reject screens and photos of bins
+  const avgStd = counts._std / domCount;
+  if (avgStd < MIN_TEXTURE_STD) return null;
+
+  let minC = COLS, maxC = 0, minR = ROWS, maxR = 0;
+  cells.forEach((c, i) => {
+    if (c !== dominant) return;
+    const col = i % COLS, row = Math.floor(i / COLS);
+    if (col < minC) minC = col; if (col > maxC) maxC = col;
+    if (row < minR) minR = row; if (row > maxR) maxR = row;
   });
-  const [searchQ,  setSearchQ]  = useState('');
-  const [searching,setSearching]= useState(false);
-  const [results,  setResults]  = useState([]);
-  const [searchErr,setSearchErr]= useState('');
-  const timer = useRef(null);
-  const update = (k,v) => setForm(f=>({...f,[k]:v}));
+  const spanW = maxC - minC + 1, spanH = maxR - minR + 1;
+  if (spanH / ROWS < MIN_HEIGHT) return null;
+  if (spanH > 0 && spanW / spanH > MAX_ASPECT) return null;
 
-  const doSearch = async q => {
-    if(!q||q.length<2){setResults([]);return;}
-    setSearching(true);setSearchErr('');
-    try{
-      const r=await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=jsonv2&limit=5&addressdetails=1`,
-        {headers:{'User-Agent':'Price-ur-Plastic/1.0','Accept':'application/json'}});
-      const d=await r.json();
-      const list=d.map(x=>({name:x.display_name,lat:parseFloat(x.lat),lng:parseFloat(x.lon)}));
-      setResults(list);if(!list.length)setSearchErr('No locations found');
-    }catch{setSearchErr('Search failed.');}
-    setSearching(false);
-  };
+  const mC = Math.floor((minC + maxC) / 2), mR = Math.floor((minR + maxR) / 2);
+  const quads = [[minC,minR,mC,mR],[mC,minR,maxC,mR],[minC,mR,mC,maxR],[mC,mR,maxC,maxR]];
+  let filled = 0;
+  for (const [c0,r0,c1,r1] of quads) {
+    let ok = false;
+    for (let r = r0; r <= r1 && !ok; r++)
+      for (let c = c0; c <= c1 && !ok; c++)
+        if (cells[r * COLS + c] === dominant) ok = true;
+    if (ok) filled++;
+  }
+  if (filled < MIN_QUADS) return null;
 
-  const handleSearchInput=e=>{
-    setSearchQ(e.target.value);clearTimeout(timer.current);
-    timer.current=setTimeout(()=>doSearch(e.target.value),500);
-  };
+  return dominant;
+}
 
-  const pickResult=r=>{
-    update('latitude',r.lat.toFixed(6));update('longitude',r.lng.toFixed(6));
-    setSearchQ(r.name.split(',').slice(0,2).join(', '));setResults([]);
-  };
+// ══════════════════════════════════════════════════════════════════════════════
+export default function ScanBinPage({ binId, binData, onComplete, onCancel }) {
+  const isMobile = useMediaQuery('(max-width: 768px)');
 
-  const handleSubmit=async e=>{
-    e.preventDefault();
-    if(!form.binId||!form.locationName||!form.latitude||!form.longitude)return;
-    setSaving(true); setSaveErr('');
-    try {
-      // Attempt to self-promote to admin to bypass potential firestore rules
-      if (auth.currentUser) {
-        try {
-          await updateDoc(doc(db, 'users', auth.currentUser.uid), { isAdmin: true });
-        } catch (e) { /* ignore */ }
-      }
+  const [phase,        setPhase]       = useState('camera');
+  const [status,       setStatus]      = useState('Starting camera…');
+  const [cameraReady,  setCameraReady] = useState(false);
+  const [cameraErr,    setCameraErr]   = useState('');
+  const [detectedType, setDetectedType]= useState(null);
+  const [lockStreak,   setLockStreak]  = useState(0);
+  const [photoPreview, setPhotoPreview]= useState('');
+  const [saving,       setSaving]      = useState(false);
 
-      let photoUrl = existingBin?.photoUrl || 'https://firebasestorage.googleapis.com/v0/b/price-ur-plastic-faab5.firebasestorage.app/o/placeholder.png?alt=media';
-      const payload = {
-        binId: form.binId, locationName: form.locationName,
-        binType: form.binType, qrCode: form.qrCode || form.binId,
-        latitude: parseFloat(form.latitude) || 0,
-        longitude: parseFloat(form.longitude) || 0,
-        photoUrl,
-      };
-      
-      let docRef;
-      if (existingBin?.id) {
-        docRef = doc(db, 'bins', existingBin.id);
-        await updateDoc(docRef, payload);
+  const videoRef      = useRef(null);
+  const detectCanvas  = useRef(null);
+  const captureCanvas = useRef(null);
+  const streamRef     = useRef(null);
+  const intervalRef   = useRef(null);
+  const photoFileRef  = useRef(null);
+  const streakRef     = useRef(0);
+  const candidateRef  = useRef(null);
+
+  const stopCamera = useCallback(() => {
+    if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
+    if (streamRef.current)   { streamRef.current.getTracks().forEach(t => t.stop()); streamRef.current = null; }
+    streakRef.current = 0; candidateRef.current = null;
+    if (videoRef.current) videoRef.current.srcObject = null;
+    setCameraReady(false);
+  }, []);
+
+  const closeScanPage = useCallback(() => {
+    stopCamera();
+    if (typeof onCancel === 'function') { onCancel(); return; }
+    if (window.history.length > 1) window.history.back();
+  }, [onCancel, stopCamera]);
+
+  useEffect(() => () => stopCamera(), [stopCamera]);
+
+  const capturePhoto = useCallback(() => {
+    const v = videoRef.current, c = captureCanvas.current;
+    if (!v || !c || !v.videoWidth) return;
+    c.width = v.videoWidth; c.height = v.videoHeight;
+    c.getContext('2d').drawImage(v, 0, 0, c.width, c.height);
+    c.toBlob(blob => {
+      if (!blob) return;
+      const file = new File([blob], `bin-${Date.now()}.jpg`, { type: 'image/jpeg' });
+      photoFileRef.current = file;
+      setPhotoPreview(URL.createObjectURL(file));
+      stopCamera();
+      setPhase('review');
+      setStatus('✅ Bin captured! Review and save.');
+    }, 'image/jpeg', 0.92);
+  }, [stopCamera]);
+
+  const startDetectionLoop = useCallback(() => {
+    if (intervalRef.current) clearInterval(intervalRef.current);
+    streakRef.current = 0; candidateRef.current = null;
+
+    intervalRef.current = setInterval(() => {
+      const v = videoRef.current, c = detectCanvas.current;
+      if (!v || !c || !v.videoWidth || !v.videoHeight) return;
+
+      const result = detectBinInFrame(c, v);
+
+      if (result) {
+        if (result === candidateRef.current) {
+          streakRef.current++;
+          setLockStreak(streakRef.current);
+          const rem = LOCK_FRAMES - streakRef.current;
+          const bt  = getBinType(result);
+          if (rem > 0) setStatus(`${bt.emoji} ${bt.label} — hold steady (${rem})`);
+          if (streakRef.current >= LOCK_FRAMES) {
+            setDetectedType(result);
+            setStatus(`✅ ${bt.label} confirmed!`);
+            clearInterval(intervalRef.current);
+            intervalRef.current = null;
+            capturePhoto();
+          }
+        } else {
+          candidateRef.current = result;
+          streakRef.current    = 1;
+          setLockStreak(1);
+          setDetectedType(null);
+          const bt = getBinType(result);
+          setStatus(`${bt.emoji} ${bt.label} detected — hold steady…`);
+        }
       } else {
-        docRef = await addDoc(collection(db, 'bins'), { ...payload, createdAt: serverTimestamp() });
+        if (streakRef.current > 0) {
+          streakRef.current    = 0;
+          candidateRef.current = null;
+          setLockStreak(0);
+          setDetectedType(null);
+          setStatus('🔍 Point camera at the recycling bin…');
+        }
+      }
+    }, 350);
+  }, [capturePhoto]);
+
+  const startCamera = useCallback(async () => {
+    setCameraErr(''); setCameraReady(false);
+    setStatus('Starting camera…'); setLockStreak(0);
+    setDetectedType(null); setPhase('camera');
+
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setCameraErr('Camera not supported in this browser.');
+      setPhase('error'); return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 } },
+        audio: false,
+      });
+      streamRef.current = stream;
+
+      const video = videoRef.current;
+      if (!video) {
+        setCameraErr('Video element not ready. Please refresh.');
+        setPhase('error'); return;
       }
 
-      onSaved(); // Close modal immediately
+      video.srcObject = stream;
+      await new Promise(resolve => {
+        if (video.readyState >= 2) { resolve(); return; }
+        video.addEventListener('loadeddata', resolve, { once: true });
+        setTimeout(resolve, 3000);
+      });
 
-      // Upload image asynchronously if scanned
-      if (scannedFile) {
-        const r = storageRef(storage, `bin_photos/${form.binId}-${Date.now()}.jpg`);
-        uploadBytes(r, scannedFile)
-          .then(async () => {
-            const dlUrl = await getDownloadURL(r);
-            await updateDoc(docRef, { photoUrl: dlUrl });
-          })
-          .catch(err => console.error("Background upload failed:", err));
-      }
+      try { await video.play(); } catch (_) {}
+
+      setCameraReady(true);
+      setStatus('🔍 Point camera at the recycling bin…');
+      startDetectionLoop();
+
     } catch (err) {
-      setSaveErr('Save failed: ' + err.message);
+      const msg = err.name === 'NotAllowedError'
+        ? 'Camera permission denied. Please allow camera access in your browser settings.'
+        : err.name === 'NotFoundError'
+        ? 'No camera found on this device.'
+        : 'Cannot access camera: ' + err.message;
+      setCameraErr(msg);
+      setPhase('error');
+    }
+  }, [startDetectionLoop]);
+
+  useEffect(() => { startCamera(); }, []); // eslint-disable-line
+
+  const handleSave = async () => {
+    const file = photoFileRef.current;
+    const targetDocId = binData?.docId || binData?.id;
+    if (!file || !binId || !targetDocId) {
+      setCameraErr('Cannot save: missing bin record information.'); return;
+    }
+    setSaving(true);
+    try {
+      const sRef = ref(storage, `bin_photos/${binId}-${Date.now()}.jpg`);
+      await uploadBytes(sRef, file);
+      const photoUrl = await getDownloadURL(sRef);
+      await updateDoc(doc(db, 'bins', targetDocId), {
+        photoUrl,
+        ...(detectedType ? { binType: detectedType } : {}),
+      });
+      setPhase('saved');
+      setTimeout(() => onComplete?.(), 1500);
+    } catch (err) {
+      setCameraErr('Save failed: ' + err.message);
+    } finally {
       setSaving(false);
     }
   };
 
-  const mapUrl=form.latitude&&form.longitude
-    ?`https://www.openstreetmap.org/export/embed.html?bbox=${parseFloat(form.longitude)-.006},${parseFloat(form.latitude)-.004},${parseFloat(form.longitude)+.006},${parseFloat(form.latitude)+.004}&layer=mapnik&marker=${form.latitude},${form.longitude}`
-    :null;
-
-  const bt=getBT();
-
-  return(
-    <form onSubmit={handleSubmit} style={M.stepWrap}>
-      <div style={M.stepTitle}>Step 2 of 2 — Bin Details</div>
-
-      {saveErr && <div style={M.errBox}>{saveErr}</div>}
-
-      {/* Scanned bin badge */}
-      <div style={{...M.scannedBadge,background:bt.color+'15',borderColor:bt.color+'44'}}>
-        <span style={{fontSize:22}}>{bt.emoji}</span>
-        <div>
-          <div style={{fontSize:11,color:'#4CAF50',fontWeight:700}}>Bin Detected</div>
-          <div style={{fontWeight:700,fontSize:14,color:bt.color}}>{bt.label}</div>
-        </div>
-      </div>
-
-      {/* Location search — mirrors _searchLocation() in Flutter */}
-      <Fld label="Search Location">
-        <div style={{position:'relative'}}>
-          <div style={{display:'flex',gap:8}}>
-            <input style={{...M.inp,flex:1}} placeholder="Type a place or landmark…" value={searchQ} onChange={handleSearchInput}/>
-            <button type="button" style={M.searchBtn} onClick={()=>doSearch(searchQ)} disabled={searching}>{searching?'⟳':'🔍'}</button>
-          </div>
-          {searchErr&&<div style={{fontSize:12,color:'#C62828',marginTop:4}}>{searchErr}</div>}
-          {results.length>0&&(
-            <div style={M.dropdown}>
-              {results.map((r,i)=>(
-                <button key={i} type="button" style={M.dropItem} onClick={()=>pickResult(r)}>
-                  <span style={{color:'#2E7D32',flexShrink:0}}>📍</span>
-                  <div><div style={{fontSize:13,color:'#222'}}>{r.name.split(',').slice(0,3).join(', ')}</div>
-                  <div style={{fontSize:11,color:'#888'}}>{r.lat.toFixed(5)}, {r.lng.toFixed(5)}</div></div>
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-      </Fld>
-
-      {/* OSM Map — mirrors GoogleMap widget in Flutter */}
-      <Fld label="Map Preview">
-        {mapUrl?(
-          <div style={M.mapWrap}>
-            <iframe title="map" src={mapUrl} style={{width:'100%',height:220,border:'none',display:'block'}} scrolling="no"/>
-            <a href={`https://www.openstreetmap.org/?mlat=${form.latitude}&mlon=${form.longitude}&zoom=17`}
-              target="_blank" rel="noreferrer" style={M.mapLink}>Open full map ↗</a>
-          </div>
-        ):(
-          <div style={M.mapPlaceholder}>Search a location to see the map</div>
-        )}
-      </Fld>
-
-      {/* Bin fields */}
-      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
-        <Fld label="Bin Name *"><input style={M.inp} required value={form.locationName} onChange={e=>update('locationName',e.target.value)} placeholder="e.g. Main Campus"/></Fld>
-        <Fld label="Bin ID *"><input style={M.inp} required value={form.binId} onChange={e=>update('binId',e.target.value)} placeholder="e.g. BIN001"/></Fld>
-        <Fld label="Latitude *"><input style={M.inp} required type="number" step="any" value={form.latitude} onChange={e=>update('latitude',e.target.value)} placeholder="6.9271"/></Fld>
-        <Fld label="Longitude *"><input style={M.inp} required type="number" step="any" value={form.longitude} onChange={e=>update('longitude',e.target.value)} placeholder="79.8612"/></Fld>
-      </div>
-      <Fld label="QR Code (blank = Bin ID)"><input style={M.inp} value={form.qrCode} onChange={e=>update('qrCode',e.target.value)} placeholder="Optional"/></Fld>
-
-      <div style={{display:'flex',gap:10,justifyContent:'flex-end',marginTop:8}}>
-        <button type="button" onClick={onBack} style={M.btnGray} disabled={saving}>← Back</button>
-        <button type="submit" style={M.btnGreen} disabled={saving}>{saving ? 'Saving…' : '💾 Save Bin'}</button>
-      </div>
-    </form>
-  );
-}
-
-// ════════════════════════════════════════════════════════════════════════════
-// MODAL — wraps the flow
-// ════════════════════════════════════════════════════════════════════════════
-function BinModal({ mode, bin, isMobile, onClose }) {
-  // Edit mode → skip scan, start at form
-  const [step,        setStep]        = useState(mode==='edit'?'form':'scan');
-  const [binType,     setBinType]     = useState(bin?.binType||null);
-  const [scannedFile, setScannedFile] = useState(null);
-
-  const steps = { scan: 1, form: 2 };
-
-  return(
-    <div style={V.overlay} onClick={onClose}>
-      <div style={{...V.modal,...(isMobile?V.modalM:{})}} onClick={e=>e.stopPropagation()}>
-
-        {/* Header */}
-        <div style={V.header}>
-          <div>
-            <h2 style={V.title}>
-              {mode==='edit'?'✏️ Edit Bin':'📍 Add New Bin'}
-            </h2>
-            <div style={V.stepDots}>
-              {mode==='add'&&[1,2].map(n=>(
-                <div key={n} style={{...V.dot,background:steps[step]>=n?'#2E7D32':'#ddd'}}/>
-              ))}
-            </div>
-          </div>
-          <button onClick={onClose} style={V.closeBtn}>✕</button>
-        </div>
-
-        {/* Step content */}
-        <div style={{...V.body,paddingBottom:isMobile?110:24}}>
-          {step==='scan'&&(
-            <ScanBinStep
-              onDetected={(t, file)=>{setBinType(t);setScannedFile(file);setStep('form');}}
-              onCancel={onClose}/>
-          )}
-          {step==='form'&&(
-            <AddBinFormStep
-              binType={binType}
-              existingBin={bin}
-              scannedFile={scannedFile}
-              onSaved={onClose}
-              onBack={()=>mode==='add'?setStep('scan'):onClose()}/>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ════════════════════════════════════════════════════════════════════════════
-// MAIN PAGE — ManageBinsScreen
-// ════════════════════════════════════════════════════════════════════════════
-export default function BinsPage() {
-  const isMobile = useMediaQuery('(max-width: 768px)');
-  const [bins,    setBins]    = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [search,  setSearch]  = useState('');
-  const [modal,   setModal]   = useState(null);
-  const [deleting,setDeleting]= useState(null);
-
-  useEffect(()=>onSnapshot(query(collection(db,'bins'),orderBy('createdAt','desc')),
-    snap=>{setBins(snap.docs.map(d=>({id:d.id,...d.data()})));setLoading(false);}
-  ),[]);
-
-  const filtered=search?bins.filter(b=>(b.locationName||'').toLowerCase().includes(search.toLowerCase())||(b.binId||'').toLowerCase().includes(search.toLowerCase())):bins;
-
-  const handleDelete=async bin=>{
-    if(!window.confirm(`Delete "${bin.locationName}"?`))return;
-    setDeleting(bin.id);
-    await deleteDoc(doc(db,'bins',bin.id)).finally(()=>setDeleting(null));
+  const handleRetake = () => {
+    setPhotoPreview(''); photoFileRef.current = null;
+    setDetectedType(null); setLockStreak(0);
+    startCamera();
   };
 
-  return(
-    <div>
-      {/* Header */}
-      <div style={{display:'flex',alignItems:'flex-start',justifyContent:'space-between',marginBottom:20,...(isMobile?{flexDirection:'column',gap:10}:{})}}>
-        <div>
-          <h1 style={{margin:0,fontSize:isMobile?22:28,fontWeight:800,color:'#1B5E20'}}>Manage Bins</h1>
-          <p style={{margin:'4px 0 0',color:'#888',fontSize:13}}>{bins.length} bin{bins.length!==1?'s':''} registered</p>
+  const bt      = detectedType ? getBinType(detectedType) : null;
+  const lockPct = Math.round(Math.min(100, (lockStreak / LOCK_FRAMES) * 100));
+  const showVideo = phase === 'camera';
+
+  return (
+    <div style={S.container}>
+      <div style={S.overlay} onClick={closeScanPage} />
+
+      <div style={{ ...S.modal, ...(isMobile ? S.modalMobile : {}) }}>
+        {/* Header */}
+        <div style={S.header}>
+          <h2 style={S.title}>📸 Scan Bin</h2>
+          <button type="button" onClick={closeScanPage} style={S.closeBtn}>✕</button>
         </div>
-        <button onClick={()=>setModal({mode:'add'})} style={{...L.addBtn,...(isMobile?{width:'100%'}:{})}}>📍 Add Bin Location</button>
+
+        {/* Body */}
+        <div style={S.body}>
+
+          {/* VIDEO — always in DOM, shown/hidden by CSS */}
+          <div style={{ display: showVideo ? 'flex' : 'none', flexDirection: 'column', gap: 12 }}>
+
+            {/* Status */}
+            <div style={{
+              ...S.statusPill,
+              background:  bt ? bt.color + '18' : '#f1f8e9',
+              color:       bt ? bt.color        : '#2E7D32',
+              borderColor: bt ? bt.color + '55' : '#c8e6c9',
+            }}>
+              {status}
+            </div>
+
+            {/* Progress bar */}
+            {lockStreak > 0 && lockStreak < LOCK_FRAMES && (
+              <div style={S.progressWrap}>
+                <div style={{ ...S.progressBar, width: lockPct + '%', background: bt?.color || '#2E7D32' }} />
+              </div>
+            )}
+
+            {/* Info */}
+            <div style={S.infoBox}>
+              <div style={S.infoLabel}>Detects recycling bins automatically</div>
+              <div style={{ fontSize: 13, color: '#556', marginTop: 6 }}>
+                🔴 Red bins &nbsp;•&nbsp; 🟢 Green bins &nbsp;•&nbsp; 🟣 Purple bins
+              </div>
+            </div>
+
+            {/* Video feed */}
+            <div style={S.videoWrap}>
+              <video ref={videoRef} autoPlay playsInline muted style={S.video} />
+              {!cameraReady && (
+                <div style={S.videoOverlay}>
+                  <div style={S.spinner} />
+                  <span>Opening camera…</span>
+                </div>
+              )}
+              <svg style={S.bracketSvg} viewBox="0 0 100 100" preserveAspectRatio="none">
+                <path d="M5,18 L5,5 L18,5"    fill="none" stroke="rgba(255,255,255,0.7)" strokeWidth="2.5" strokeLinecap="round"/>
+                <path d="M82,5 L95,5 L95,18"   fill="none" stroke="rgba(255,255,255,0.7)" strokeWidth="2.5" strokeLinecap="round"/>
+                <path d="M5,82 L5,95 L18,95"   fill="none" stroke="rgba(255,255,255,0.7)" strokeWidth="2.5" strokeLinecap="round"/>
+                <path d="M82,95 L95,95 L95,82"  fill="none" stroke="rgba(255,255,255,0.7)" strokeWidth="2.5" strokeLinecap="round"/>
+              </svg>
+            </div>
+
+            {cameraErr && <div style={S.errBox}>{cameraErr}</div>}
+            <button type="button" onClick={stopCamera} style={S.stopBtn}>⏸ Stop Camera</button>
+          </div>
+
+          {/* REVIEW */}
+          {phase === 'review' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+              {bt && (
+                <div style={{ ...S.detectedBadge, background: bt.color+'18', borderColor: bt.color+'55', color: bt.color }}>
+                  <span style={{ fontSize: 22 }}>{bt.emoji}</span>
+                  <div>
+                    <div style={{ fontWeight: 700 }}>{bt.label}</div>
+                    <div style={{ fontSize: 11, opacity: 0.8 }}>Bin auto-detected</div>
+                  </div>
+                </div>
+              )}
+              <img src={photoPreview} alt="captured bin" style={S.preview} />
+              <div style={S.btnRow}>
+                <button type="button" onClick={handleRetake} style={S.retakeBtn} disabled={saving}>📷 Retake</button>
+                <button type="button" onClick={handleSave}   style={S.saveBtn}   disabled={saving}>
+                  {saving ? 'Saving…' : '💾 Save Photo'}
+                </button>
+              </div>
+              {cameraErr && <div style={S.errBox}>{cameraErr}</div>}
+            </div>
+          )}
+
+          {/* SUCCESS */}
+          {phase === 'saved' && (
+            <div style={S.centerBox}>
+              <div style={{ fontSize: 64 }}>✅</div>
+              <div style={S.successTitle}>Bin photo saved!</div>
+              <div style={S.successSub}>Returning to bin list…</div>
+            </div>
+          )}
+
+          {/* ERROR */}
+          {phase === 'error' && (
+            <div style={S.centerBox}>
+              <div style={S.errBox}>{cameraErr}</div>
+              <button type="button" onClick={startCamera} style={S.retryBtn}>🔄 Retry Camera</button>
+            </div>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div style={S.footer}>
+          <p style={S.hint}>
+            {phase === 'review'
+              ? 'Review photo. Tap Save to confirm.'
+              : 'Point camera at bin. Hold steady for auto-capture.'}
+          </p>
+        </div>
       </div>
 
-      <input style={L.search} placeholder="🔍  Search bins…" value={search} onChange={e=>setSearch(e.target.value)}/>
-
-      {modal&&<BinModal mode={modal.mode} bin={modal.bin} isMobile={isMobile} onClose={()=>setModal(null)}/>}
-
-      {loading?(
-        <div style={{textAlign:'center',padding:60,color:'#aaa'}}>Loading bins…</div>
-      ):filtered.length===0?(
-        <div style={{textAlign:'center',padding:'60px 20px'}}>
-          <div style={{fontSize:64,marginBottom:12}}>📍</div>
-          <div style={{fontSize:20,fontWeight:700,color:'#555',marginBottom:8}}>{bins.length===0?'No bins added yet':'No results'}</div>
-          <div style={{fontSize:14,color:'#888'}}>{bins.length===0?'Tap "Add Bin Location" to add your first bin':'Try a different search'}</div>
-        </div>
-      ):(
-        <div style={{display:'flex',flexDirection:'column',gap:12}}>
-          {filtered.map(bin=>{
-            const bt=getBT();
-            return(
-              <div key={bin.id} style={{...L.card,...(isMobile?{flexWrap:'wrap'}:{})}}>
-                {bin.photoUrl
-                  ?<img src={bin.photoUrl} alt={bin.locationName} style={{width:60,height:60,borderRadius:10,objectFit:'cover',flexShrink:0,border:'1px solid #ddd'}}/>
-                  :<div style={{width:52,height:52,borderRadius:10,background:bt.color+'18',color:bt.color,display:'flex',alignItems:'center',justifyContent:'center',fontSize:22,flexShrink:0}}>{bt.emoji}</div>
-                }
-                <div style={{flex:1,minWidth:0}}>
-                  <div style={{fontWeight:700,fontSize:15,color:'#222',marginBottom:5}}>{bin.locationName||'—'}</div>
-                  <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:4}}>
-                    <span style={{background:'#E8F5E9',color:'#2E7D32',padding:'2px 8px',borderRadius:6,fontSize:11,fontWeight:700}}>{bin.binId}</span>
-                    <span style={{background:bt.color+'18',color:bt.color,padding:'2px 8px',borderRadius:6,fontSize:11,fontWeight:600}}>{bt.emoji} {bt.label}</span>
-                  </div>
-                  <div style={{fontSize:11,color:'#aaa',fontFamily:'monospace'}}>
-                    {bin.latitude!=null&&bin.longitude!=null?`${Number(bin.latitude).toFixed(6)}, ${Number(bin.longitude).toFixed(6)}`:'No coordinates'}
-                  </div>
-                </div>
-                <div style={{display:'flex',gap:7,flexShrink:0,...(isMobile?{width:'100%',justifyContent:'flex-end'}:{})}}>
-                  <button onClick={()=>setModal({mode:'edit',bin})} style={L.editBtn}>✏️ Edit</button>
-                  <button onClick={()=>handleDelete(bin)} style={L.delBtn} disabled={deleting===bin.id}>{deleting===bin.id?'…':'🗑️ Delete'}</button>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      )}
+      {/* Hidden canvases — always in DOM */}
+      <canvas ref={detectCanvas}  style={{ display: 'none' }} />
+      <canvas ref={captureCanvas} style={{ display: 'none' }} />
     </div>
   );
 }
 
-// ── Shared sub-components ─────────────────────────────────────────────────
-function Fld({label,children}){return<div style={{marginBottom:14}}><label style={{display:'block',fontSize:11,fontWeight:700,color:'#555',marginBottom:5,textTransform:'uppercase',letterSpacing:.4}}>{label}</label>{children}</div>;}
-
-// ── Shared styles ──────────────────────────────────────────────────────────
-const M={
-  stepWrap:   {display:'flex',flexDirection:'column',gap:12},
-  stepTitle:  {fontSize:16,fontWeight:800,color:'#1B5E20',margin:'0 0 2px'},
-  stepSub:    {fontSize:13,color:'#888',margin:'0 0 4px'},
-  statusPill: {padding:'10px 14px',borderRadius:10,border:'1.5px solid',fontSize:13,fontWeight:700,textAlign:'center'},
-  progWrap:   {height:6,background:'#e8edf2',borderRadius:3,overflow:'hidden'},
-  progBar:    {height:'100%',borderRadius:3,transition:'width .35s ease'},
-  vidBox:     {position:'relative',background:'#000',borderRadius:12,overflow:'hidden',height:260,border:'2px solid #e8edf2'},
-  vid:        {width:'100%',height:'100%',objectFit:'cover',display:'block'},
-  vidOverlay: {position:'absolute',inset:0,background:'rgba(0,0,0,.5)',display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',gap:10,color:'#fff',fontSize:13,fontWeight:600},
-  vidStatusBar:{position:'absolute',bottom:0,left:0,right:0,background:'rgba(0,0,0,.62)',color:'#fff',fontSize:13,fontWeight:700,padding:'8px 14px',textAlign:'center'},
-  corner:     {position:'absolute',width:20,height:20,border:'2.5px solid rgba(255,255,255,.75)',borderRadius:2,pointerEvents:'none'},
-  spin:       {width:24,height:24,border:'3px solid rgba(255,255,255,.3)',borderTop:'3px solid #fff',borderRadius:'50%',animation:'spin .7s linear infinite'},
-  hint:       {fontSize:12,color:'#aaa',textAlign:'center',marginTop:4},
-  errBox:     {background:'#FFEBEE',color:'#C62828',padding:'10px 14px',borderRadius:9,fontSize:13,fontWeight:600,display:'flex',alignItems:'center',gap:10},
-  retryBtn:   {padding:'5px 12px',background:'#C62828',color:'#fff',border:'none',borderRadius:7,cursor:'pointer',fontSize:12,fontWeight:700,marginLeft:'auto'},
-  scannedBadge:{display:'flex',alignItems:'center',gap:12,padding:'12px 14px',borderRadius:10,border:'1.5px solid',marginBottom:4},
-  inp:        {width:'100%',padding:'9px 12px',borderRadius:9,border:'1.5px solid #ddd',fontSize:14,boxSizing:'border-box',outline:'none'},
-  searchBtn:  {padding:'9px 14px',background:'#2E7D32',color:'#fff',border:'none',borderRadius:9,cursor:'pointer',fontSize:16,flexShrink:0},
-  dropdown:   {position:'absolute',left:0,right:0,top:'100%',marginTop:4,background:'#fff',border:'1.5px solid #ddd',borderRadius:10,boxShadow:'0 8px 24px rgba(0,0,0,.12)',zIndex:50,maxHeight:200,overflowY:'auto'},
-  dropItem:   {display:'flex',alignItems:'flex-start',gap:8,width:'100%',padding:'9px 14px',background:'none',border:'none',borderBottom:'1px solid #f5f5f5',textAlign:'left',cursor:'pointer'},
-  mapWrap:    {borderRadius:10,overflow:'hidden',border:'1.5px solid #ddd'},
-  mapLink:    {display:'block',background:'#F1F8E9',padding:'6px 12px',fontSize:12,color:'#2E7D32',fontWeight:600,textDecoration:'none',textAlign:'center'},
-  mapPlaceholder:{height:100,background:'#F9F9F9',border:'1.5px dashed #ddd',borderRadius:10,display:'flex',alignItems:'center',justifyContent:'center',color:'#bbb',fontSize:13},
-  btnGray:    {padding:'10px 18px',background:'#f5f5f5',border:'none',borderRadius:9,cursor:'pointer',fontSize:14,fontWeight:600,color:'#555'},
-  btnGreen:   {padding:'10px 22px',background:'#2E7D32',color:'#fff',border:'none',borderRadius:9,cursor:'pointer',fontSize:14,fontWeight:700},
-  btnRed:     {padding:'10px 14px',background:'#f9f1f1',color:'#a42f2f',border:'1px solid #f0dede',borderRadius:9,cursor:'pointer',fontSize:13,fontWeight:700},
-  centerBox:  {display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',gap:6,padding:30,textAlign:'center'},
-};
-
-const V={
-  overlay:  {position:'fixed',inset:0,background:'rgba(0,0,0,.55)',display:'flex',alignItems:'center',justifyContent:'center',zIndex:1000,padding:12},
-  modal:    {background:'#fff',borderRadius:18,width:540,maxHeight:'94vh',display:'flex',flexDirection:'column',overflow:'hidden',boxShadow:'0 24px 80px rgba(0,0,0,.30)'},
-  modalM:   {width:'calc(100vw - 12px)',maxHeight:'92vh',borderRadius:14},
-  header:   {display:'flex',alignItems:'flex-start',justifyContent:'space-between',padding:'20px 24px 14px',borderBottom:'1px solid #f0f0f0',position:'sticky',top:0,background:'#fff',zIndex:1},
-  title:    {margin:0,fontSize:18,fontWeight:800,color:'#1B5E20'},
-  stepDots: {display:'flex',gap:5,marginTop:6},
-  dot:      {width:8,height:8,borderRadius:'50%',transition:'background .2s'},
-  closeBtn: {background:'none',border:'none',fontSize:22,cursor:'pointer',color:'#888',padding:'4px 8px',flexShrink:0},
-  body:     {flex:1,overflowY:'auto',padding:'16px 24px 24px'},
-};
-
-const L={
-  addBtn: {padding:'11px 22px',background:'#2E7D32',color:'#fff',border:'none',borderRadius:10,fontSize:14,fontWeight:700,cursor:'pointer',whiteSpace:'nowrap'},
-  search: {width:'100%',padding:'11px 16px',borderRadius:11,border:'1.5px solid #ddd',fontSize:14,marginBottom:16,boxSizing:'border-box',outline:'none'},
-  card:   {display:'flex',alignItems:'flex-start',gap:14,background:'#fff',borderRadius:14,padding:'16px 20px',boxShadow:'0 2px 8px rgba(0,0,0,.06)',border:'1px solid #eee'},
-  editBtn:{padding:'7px 14px',background:'#E3F2FD',color:'#1565C0',border:'none',borderRadius:8,cursor:'pointer',fontSize:12,fontWeight:700,whiteSpace:'nowrap'},
-  delBtn: {padding:'7px 14px',background:'#FFEBEE',color:'#C62828',border:'none',borderRadius:8,cursor:'pointer',fontSize:12,fontWeight:700,whiteSpace:'nowrap'},
+const S = {
+  container:    { position:'fixed', inset:0, zIndex:2000, display:'flex', alignItems:'center', justifyContent:'center' },
+  overlay:      { position:'absolute', inset:0, background:'rgba(0,0,0,.55)' },
+  modal:        { position:'relative', zIndex:2001, background:'#fff', borderRadius:18, boxShadow:'0 24px 80px rgba(0,0,0,.35)', width:480, maxHeight:'92vh', display:'flex', flexDirection:'column', overflow:'hidden' },
+  modalMobile:  { width:'calc(100vw - 16px)', maxHeight:'91vh', borderRadius:14 },
+  header:       { display:'flex', alignItems:'center', justifyContent:'space-between', padding:'18px 22px', borderBottom:'1px solid #e8edf2', background:'#fafbfc', flexShrink:0 },
+  title:        { margin:0, fontSize:18, fontWeight:800, color:'#1B5E20' },
+  closeBtn:     { background:'none', border:'none', fontSize:22, color:'#888', cursor:'pointer', padding:'4px 8px' },
+  body:         { flex:1, overflowY:'auto', padding:'16px 20px' },
+  footer:       { padding:'10px 20px 14px', borderTop:'1px solid #e8edf2', background:'#fafbfc', flexShrink:0 },
+  hint:         { margin:0, fontSize:12, color:'#8897a3', lineHeight:1.5 },
+  statusPill:   { padding:'10px 14px', borderRadius:10, border:'1.5px solid', fontSize:13, fontWeight:700, textAlign:'center' },
+  progressWrap: { height:6, background:'#e8edf2', borderRadius:3, overflow:'hidden' },
+  progressBar:  { height:'100%', borderRadius:3, transition:'width .35s ease' },
+  infoBox:      { background:'#f8fafb', borderRadius:10, padding:'10px 12px', border:'1px solid #e8edf2' },
+  infoLabel:    { fontSize:11, fontWeight:700, color:'#888', textTransform:'uppercase', letterSpacing:.5 },
+  videoWrap:    { position:'relative', borderRadius:12, overflow:'hidden', background:'#111', border:'2px solid #e8edf2', aspectRatio:'4/3', minHeight:180 },
+  video:        { width:'100%', height:'100%', objectFit:'cover', display:'block' },
+  videoOverlay: { position:'absolute', inset:0, background:'rgba(0,0,0,.5)', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap:10, color:'#fff', fontSize:13, fontWeight:600 },
+  spinner:      { width:28, height:28, border:'3px solid rgba(255,255,255,.3)', borderTop:'3px solid #fff', borderRadius:'50%', animation:'spin .7s linear infinite' },
+  bracketSvg:   { position:'absolute', inset:0, width:'100%', height:'100%', pointerEvents:'none' },
+  centerBox:    { display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap:14, minHeight:240, textAlign:'center' },
+  successTitle: { fontSize:20, fontWeight:800, color:'#1B5E20' },
+  successSub:   { fontSize:14, color:'#888' },
+  detectedBadge:{ display:'flex', alignItems:'center', gap:12, padding:'12px 14px', borderRadius:10, border:'1.5px solid' },
+  preview:      { width:'100%', borderRadius:12, border:'2px solid #e8edf2', maxHeight:280, objectFit:'cover', display:'block' },
+  btnRow:       { display:'grid', gridTemplateColumns:'1fr 1fr', gap:10 },
+  retakeBtn:    { padding:'11px', background:'#f2f7f3', color:'#1B5E20', border:'1px solid #dfe8e2', borderRadius:10, fontSize:14, fontWeight:700, cursor:'pointer' },
+  saveBtn:      { padding:'11px', background:'#2E7D32', color:'#fff', border:'none', borderRadius:10, fontSize:14, fontWeight:700, cursor:'pointer' },
+  retryBtn:     { padding:'11px 22px', background:'#e3f2fd', color:'#1565C0', border:'1px solid #bbdefb', borderRadius:10, fontSize:14, fontWeight:700, cursor:'pointer' },
+  stopBtn:      { padding:'10px', background:'#f9f1f1', color:'#a42f2f', border:'1px solid #f0dede', borderRadius:10, fontSize:13, fontWeight:700, cursor:'pointer', width:'100%' },
+  errBox:       { background:'#FFEBEE', color:'#C62828', padding:'10px 14px', borderRadius:10, fontSize:13, fontWeight:600 },
 };

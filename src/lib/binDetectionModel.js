@@ -8,6 +8,8 @@ export const MIN_COVER = 0.22;
 export const MIN_HEIGHT = 0.35;
 export const MAX_ASPECT = 1.8;
 export const MIN_QUADS = 4;
+export const MIN_MOTION = 1.6;
+export const MOTION_SAMPLE_STEP = 12;
 
 // RGB -> YUV, also return R,G,B for pre-filter
 export function rgbToYuv(r, g, b) {
@@ -57,6 +59,10 @@ export function detectBinInFrame(canvas, video) {
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
   ctx.drawImage(video, 0, 0, fw, fh);
   const { data } = ctx.getImageData(0, 0, fw, fh);
+
+  const motion = measureFrameMotion(canvas.__binPrevFrame, data, fw, fh);
+  canvas.__binPrevFrame = data.slice();
+  if (motion < MIN_MOTION) return null;
 
   const cellW = Math.floor(fw / COLS);
   const cellH = Math.floor(fh / ROWS);
@@ -114,4 +120,25 @@ export function detectBinInFrame(canvas, video) {
   if (filled < MIN_QUADS) return null;
 
   return dominant;
+}
+
+export function measureFrameMotion(previousFrame, currentFrame, width, height) {
+  if (!previousFrame || !currentFrame || previousFrame.length !== currentFrame.length) return 0;
+
+  let total = 0;
+  let samples = 0;
+  const step = Math.max(1, MOTION_SAMPLE_STEP);
+
+  for (let y = 0; y < height; y += step) {
+    for (let x = 0; x < width; x += step) {
+      const index = (y * width + x) * 4;
+      const dr = Math.abs(currentFrame[index] - previousFrame[index]);
+      const dg = Math.abs(currentFrame[index + 1] - previousFrame[index + 1]);
+      const db = Math.abs(currentFrame[index + 2] - previousFrame[index + 2]);
+      total += (dr + dg + db) / 3;
+      samples++;
+    }
+  }
+
+  return samples ? total / samples : 0;
 }
