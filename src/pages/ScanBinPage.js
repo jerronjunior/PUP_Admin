@@ -6,6 +6,7 @@ import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import useMediaQuery from '../hooks/useMediaQuery';
 
 import { COLS, ROWS, LOCK_FRAMES, MIN_COVER, MIN_HEIGHT, MAX_ASPECT, MIN_QUADS, rgbToYuv, classifyCell, detectBinInFrame } from '../lib/binDetectionModel';
+import { loadClientModel, predictCanvas, predictBlobViaServer } from '../lib/binModelClient';
 
 // ── Bin types ─────────────────────────────────────────────────────────────
 const BIN_TYPES = [
@@ -85,11 +86,40 @@ export default function ScanBinPage({ binId, binData, onComplete, onCancel }) {
           const bt  = getBinType(result);
           if (rem > 0) setStatus(`${bt.emoji} ${bt.label} — hold steady (${rem})`);
           if (streakRef.current >= LOCK_FRAMES) {
-            setDetectedType(result);
-            setStatus(`✅ ${bt.label} confirmed!`);
-            clearInterval(intervalRef.current);
-            intervalRef.current = null;
-            capturePhoto();
+            // Before auto-capture, validate with ML model (client first, then server fallback)
+            (async () => {
+              setStatus('Verifying with model…');
+              const v = videoRef.current, c = detectCanvas.current;
+              let ok = false;
+              try {
+                // attempt client prediction
+                const score = await predictCanvas(c, 224);
+                if (score !== null && score >= 0.8) ok = true;
+                // if no client model or low score, try server if configured
+                if (!ok && process.env.REACT_APP_BIN_DETECTOR_URL) {
+                  // take a snapshot blob
+                  const snap = document.createElement('canvas'); snap.width = v.videoWidth; snap.height = v.videoHeight;
+                  snap.getContext('2d').drawImage(v, 0, 0, snap.width, snap.height);
+                  const blob = await new Promise(r => snap.toBlob(r, 'image/jpeg', 0.9));
+                  const serverScore = await predictBlobViaServer(blob, process.env.REACT_APP_BIN_DETECTOR_URL + '/detect');
+                  if (serverScore !== null && serverScore >= 0.8) ok = true;
+                }
+              } catch (e) {
+                console.warn(e);
+              }
+
+              if (ok) {
+                setDetectedType(result);
+                setStatus(`✅ ${bt.label} confirmed!`);
+                clearInterval(intervalRef.current);
+                intervalRef.current = null;
+                capturePhoto();
+              } else {
+                // reject and reset streak
+                streakRef.current = 0; candidateRef.current = null; setLockStreak(0);
+                setStatus('Verification failed — try again with a real bin.');
+              }
+            })();
           }
         } else {
           candidateRef.current = result;
