@@ -64,9 +64,37 @@ function Sidebar({ user, onSignOut, onNavigate, isMobile }) {
             <div style={s.userRole}>Administrator</div>
           </div>
         </NavLink>
-        <button onClick={onSignOut} style={s.signOutBtn} title="Sign out">⏻</button>
+        <button onClick={onSignOut} style={s.signOutBtn} title="Sign out" aria-label="Sign out">
+          <PowerIcon size={14} />
+        </button>
       </div>
     </aside>
+  );
+}
+
+function PowerIcon({ size = 18 }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <path
+        d="M12 3v8"
+        stroke="currentColor"
+        strokeWidth="2.2"
+        strokeLinecap="round"
+      />
+      <path
+        d="M7.5 5.6a8 8 0 1 0 9 0"
+        stroke="currentColor"
+        strokeWidth="2.2"
+        strokeLinecap="round"
+      />
+    </svg>
   );
 }
 
@@ -142,7 +170,7 @@ export default function App() {
             </button>
             <div style={{ ...s.mobileHeaderTitle, ...(isTinyMobile ? s.mobileHeaderTitleTiny : {}) }}>RecycleScan Admin</div>
             <button onClick={handleSignOut} style={s.mobileSignOutBtn} title="Sign out" aria-label="Sign out">
-              ⏻
+              <PowerIcon size={18} />
             </button>
           </header>
 
@@ -224,7 +252,7 @@ const s = {
   userAvatar: { width: 32, height: 32, borderRadius: '50%', background: '#69F0AE', color: '#1B5E20', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, fontSize: 14, flexShrink: 0 },
   userEmail:  { color: 'rgba(255,255,255,.85)', fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
   userRole:   { color: 'rgba(255,255,255,.45)', fontSize: 10 },
-  signOutBtn: { background: 'rgba(255,255,255,.12)', border: 'none', color: '#fff', width: 28, height: 28, borderRadius: 6, cursor: 'pointer', fontSize: 14, display: 'flex', alignItems: 'center', justifyContent: 'center' },
+  signOutBtn: { background: 'rgba(255,255,255,.12)', border: 'none', color: '#fff', width: 28, height: 28, borderRadius: 6, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' },
   main:       { flex: 1, overflow: 'auto', padding: '28px 32px' },
   mobileLayout:{ minHeight: '100vh', background: '#F0F4F8', fontFamily: "'Inter', system-ui, sans-serif" },
   mobileHeader:{ position: 'sticky', top: 0, zIndex: 1100, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, padding: '12px 14px', background: '#fff', borderBottom: '1px solid #e8edf2' },
@@ -232,7 +260,7 @@ const s = {
   mobileHeaderTitle:{ flex: 1, minWidth: 0, textAlign: 'center', fontSize: 16, fontWeight: 800, color: '#1B5E20', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
   mobileHeaderTitleTiny: { fontSize: 14 },
   menuBtn:    { background: '#f2f7f3', border: '1px solid #dfe8e2', color: '#1B5E20', width: 36, height: 36, borderRadius: 8, cursor: 'pointer', fontSize: 18, lineHeight: 1, flexShrink: 0 },
-  mobileSignOutBtn:{ background: '#a42f2f', border: '1px solid #8f2626', color: '#fff', width: 40, height: 40, borderRadius: 10, cursor: 'pointer', fontSize: 18, fontWeight: 700, lineHeight: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, boxShadow: '0 2px 8px rgba(164,47,47,.25)' },
+  mobileSignOutBtn:{ background: '#a42f2f', border: '1px solid #8f2626', color: '#fff', width: 40, height: 40, borderRadius: 10, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, boxShadow: '0 2px 8px rgba(164,47,47,.25)' },
   mobileOverlay:{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.3)', zIndex: 1200 },
   mobileDrawer:{ position: 'fixed', top: 0, left: 0, width: '80%', maxWidth: 320, height: '100dvh', zIndex: 1300, boxShadow: '4px 0 18px rgba(0,0,0,.25)' },
   mainMobile: { padding: '14px 12px 90px' },
