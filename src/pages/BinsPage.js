@@ -181,19 +181,6 @@ function ScanBinStep({ onDetected, onCancel }) {
         <div style={M.progWrap}><div style={{...M.progBar,width:pct+'%',background:bt?.color||'#2E7D32'}}/></div>
       )}
 
-      {/* Bin type guide */}
-      <div style={M.guideBox}>
-        <div style={M.guideLabel}>Detects automatically:</div>
-        <div style={M.guideGrid}>
-          {BIN_TYPES.map(t=>(
-            <div key={t.value} style={{...M.guideItem,borderColor:candidate===t.value?t.color:'#eee',background:candidate===t.value?t.color+'18':'#fafafa'}}>
-              <span style={{fontSize:20}}>{t.emoji}</span>
-              <span style={{fontSize:10,color:'#555',textAlign:'center',lineHeight:1.2}}>{t.label.split(' ')[0]}</span>
-            </div>
-          ))}
-        </div>
-      </div>
-
       {/* Video */}
       <div style={M.vidBox}>
         <video ref={videoRef} autoPlay playsInline muted style={M.vid}/>
@@ -522,10 +509,6 @@ const M={
   statusPill: {padding:'10px 14px',borderRadius:10,border:'1.5px solid',fontSize:13,fontWeight:700,textAlign:'center'},
   progWrap:   {height:6,background:'#e8edf2',borderRadius:3,overflow:'hidden'},
   progBar:    {height:'100%',borderRadius:3,transition:'width .35s ease'},
-  guideBox:   {background:'#f8fafb',borderRadius:10,padding:'10px 12px',border:'1px solid #e8edf2'},
-  guideLabel: {fontSize:11,fontWeight:700,color:'#888',textTransform:'uppercase',letterSpacing:.5,marginBottom:8},
-  guideGrid:  {display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:6},
-  guideItem:  {display:'flex',flexDirection:'column',alignItems:'center',gap:3,padding:'7px 4px',borderRadius:8,border:'1.5px solid',transition:'all .2s'},
   vidBox:     {position:'relative',background:'#000',borderRadius:12,overflow:'hidden',height:260,border:'2px solid #e8edf2'},
   vid:        {width:'100%',height:'100%',objectFit:'cover',display:'block'},
   vidOverlay: {position:'absolute',inset:0,background:'rgba(0,0,0,.5)',display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',gap:10,color:'#fff',fontSize:13,fontWeight:600},
