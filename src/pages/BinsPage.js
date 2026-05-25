@@ -235,6 +235,84 @@ function BinModal({ mode, bin, isMobile, onClose }) {
     return () => URL.revokeObjectURL(url);
   }, [photoFile]);
 
+  const startDetectionLoop = useCallback(() => {
+    if (intervalRef.current) clearInterval(intervalRef.current);
+    intervalRef.current = setInterval(() => {
+      const video = videoRef.current;
+      const canvas = detectCanvas.current;
+      if (!video || !canvas || !video.videoWidth) return;
+
+      canvas.width = FRAME_W;
+      canvas.height = FRAME_H;
+      const ctx = canvas.getContext('2d', { willReadFrequently: true });
+      ctx.drawImage(video, 0, 0, FRAME_W, FRAME_H);
+      const frame = ctx.getImageData(0, 0, FRAME_W, FRAME_H).data;
+      if (!prevFrame.current) {
+        prevFrame.current = new Uint8ClampedArray(frame);
+        return;
+      }
+
+      let diff = 0;
+      for (let i = 0; i < frame.length; i += 4) {
+        diff += (
+          Math.abs(frame[i] - prevFrame.current[i]) +
+          Math.abs(frame[i + 1] - prevFrame.current[i + 1]) +
+          Math.abs(frame[i + 2] - prevFrame.current[i + 2])
+        ) / 3;
+      }
+      prevFrame.current = new Uint8ClampedArray(frame);
+      const avg = diff / (FRAME_W * FRAME_H);
+
+      if (!motionSeen.current && avg > MOTION_THRESHOLD) {
+        motionSeen.current = true;
+        stableCount.current = 0;
+        setCamStatus('🎯 Bin detected — hold steady…');
+        return;
+      }
+
+      if (motionSeen.current) {
+        if (avg < STABLE_THRESHOLD) {
+          stableCount.current++;
+          const remaining = STABLE_FRAMES_NEEDED - stableCount.current;
+          if (remaining > 0) setCamStatus(`Hold steady… ${remaining}`);
+          if (stableCount.current >= STABLE_FRAMES_NEEDED) captureNow();
+        } else {
+          stableCount.current = 0;
+        }
+      }
+    }, 350);
+  }, []);
+
+  const startCamera = useCallback(async () => {
+    setCamErr('');
+    setCamStatus('Starting camera…');
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setCamErr('Camera not supported in this browser.');
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: 'environment' } },
+        audio: false,
+      });
+      streamRef.current = stream;
+      setCamOpen(true);
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        await videoRef.current.play();
+      }
+      prevFrame.current = null;
+      stableCount.current = 0;
+      motionSeen.current = false;
+      setCamStatus('📷 Point camera at the bin…');
+      startDetectionLoop();
+    } catch {
+      setCamOpen(false);
+      setCamErr('Cannot access camera. Allow permission.');
+    }
+  }, [startDetectionLoop]);
+
   useEffect(() => {
     if (isScanStep) startCamera();
   }, [isScanStep, startCamera]);
@@ -289,83 +367,7 @@ function BinModal({ mode, bin, isMobile, onClose }) {
     }, 'image/jpeg', 0.9);
   };
 
-  const startDetectionLoop = () => {
-    if (intervalRef.current) clearInterval(intervalRef.current);
-    intervalRef.current = setInterval(() => {
-      const video = videoRef.current;
-      const canvas = detectCanvas.current;
-      if (!video || !canvas || !video.videoWidth) return;
-
-      canvas.width = FRAME_W;
-      canvas.height = FRAME_H;
-      const ctx = canvas.getContext('2d', { willReadFrequently: true });
-      ctx.drawImage(video, 0, 0, FRAME_W, FRAME_H);
-      const frame = ctx.getImageData(0, 0, FRAME_W, FRAME_H).data;
-      if (!prevFrame.current) {
-        prevFrame.current = new Uint8ClampedArray(frame);
-        return;
-      }
-
-      let diff = 0;
-      for (let i = 0; i < frame.length; i += 4) {
-        diff += (
-          Math.abs(frame[i] - prevFrame.current[i]) +
-          Math.abs(frame[i + 1] - prevFrame.current[i + 1]) +
-          Math.abs(frame[i + 2] - prevFrame.current[i + 2])
-        ) / 3;
-      }
-      prevFrame.current = new Uint8ClampedArray(frame);
-      const avg = diff / (FRAME_W * FRAME_H);
-
-      if (!motionSeen.current && avg > MOTION_THRESHOLD) {
-        motionSeen.current = true;
-        stableCount.current = 0;
-        setCamStatus('🎯 Bin detected — hold steady…');
-        return;
-      }
-
-      if (motionSeen.current) {
-        if (avg < STABLE_THRESHOLD) {
-          stableCount.current++;
-          const remaining = STABLE_FRAMES_NEEDED - stableCount.current;
-          if (remaining > 0) setCamStatus(`Hold steady… ${remaining}`);
-          if (stableCount.current >= STABLE_FRAMES_NEEDED) captureNow();
-        } else {
-          stableCount.current = 0;
-        }
-      }
-    }, 350);
-  };
-
-  const startCamera = async () => {
-    setCamErr('');
-    setCamStatus('Starting camera…');
-    if (!navigator.mediaDevices?.getUserMedia) {
-      setCamErr('Camera not supported in this browser.');
-      return;
-    }
-
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: { ideal: 'environment' } },
-        audio: false,
-      });
-      streamRef.current = stream;
-      setCamOpen(true);
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        await videoRef.current.play();
-      }
-      prevFrame.current = null;
-      stableCount.current = 0;
-      motionSeen.current = false;
-      setCamStatus('📷 Point camera at the bin…');
-      startDetectionLoop();
-    } catch {
-      setCamOpen(false);
-      setCamErr('Cannot access camera. Allow permission.');
-    }
-  };
+  
 
   const retakeScan = () => {
     setPhotoFile(null);
