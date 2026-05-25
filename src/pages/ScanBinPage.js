@@ -5,132 +5,13 @@ import { doc, updateDoc } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import useMediaQuery from '../hooks/useMediaQuery';
 
-// ── Detection grid constants — CALIBRATED FROM 78 REAL BIN IMAGES ─────────
-const COLS        = 16;
-const ROWS        = 12;
-const LOCK_FRAMES = 15;   // raised 8→15: fewer false positives
-const MIN_COVER   = 0.22; // raised 0.15→0.22: bags cover less uniformly
-const MIN_HEIGHT  = 0.35; // raised 0.30→0.35: bins are tall structures
-const MAX_ASPECT  = 1.8;
-const MIN_QUADS   = 4;    // raised 3→4: bins fill all quadrants uniformly
+import { COLS, ROWS, LOCK_FRAMES, MIN_COVER, MIN_HEIGHT, MAX_ASPECT, MIN_QUADS, rgbToYuv, classifyCell, detectBinInFrame } from '../lib/binDetectionModel';
 
 // ── Bin types ─────────────────────────────────────────────────────────────
 const BIN_TYPES = [
   { value: 'bin', label: 'Recycling Bin', emoji: '🗑️', color: '#2E7D32' },
 ];
 const getBinType = v => BIN_TYPES.find(t => t.value === v);
-
-// ── RGB → YUV ─────────────────────────────────────────────────────────────
-function rgbToYuv(r, g, b) {
-  return {
-    Y:  0.299 * r + 0.587 * g + 0.114 * b,
-    U: -0.169 * r - 0.331 * g + 0.500 * b + 128,
-    V:  0.500 * r - 0.419 * g - 0.081 * b + 128,
-  };
-}
-
-// ── classifyCell — YUV CALIBRATED FROM 78 REAL BIN IMAGES (May 2026) ─────
-// Analyzed with numpy from actual Sri Lankan bin photos.
-//
-// GREEN bins:  Y=40-142, U=114-134, V=88-122
-//   TIGHT U band (114-134) is the key differentiator:
-//   - Plastic bags:   U > 135  → REJECTED
-//   - Plants/grass:   U < 112  → REJECTED
-//   - Green clothing: U < 112  → REJECTED
-//   - Yellow-green:   V > 123  → REJECTED
-//
-// RED bins: Y=39-144, U=101-124, V=137-197
-//   - Red cloth:   V < 137  → REJECTED
-//   - Brick walls: Y > 144  → REJECTED
-//   - Pink items:  U > 126  → REJECTED
-//
-// PURPLE bins (Eco Spindles): Y=18-90, U=118-160, V=108-145
-function classifyCell(Y, U, V) {
-  // RED bins (Coca-Cola / Cargills)
-  if (Y >= 39 && Y <= 144 && U >= 101 && U <= 124 && V >= 137 && V <= 197) return 'bin';
-
-  // GREEN bins (Keells, Clean Sri Lanka wire cage, Carekleen dark green)
-  if (Y >= 40 && Y <= 142 && U >= 114 && U <= 134 && V >= 88  && V <= 122) return 'bin';
-
-  // PURPLE bins (Eco Spindles)
-  if (Y >= 18 && Y <= 90  && U >= 118 && U <= 160 && V >= 108 && V <= 145) return 'bin';
-
-  return null;
-}
-
-// ── Full 4-check bin detection ─────────────────────────────────────────────
-function detectBinInFrame(canvas, video) {
-  const fw = video.videoWidth, fh = video.videoHeight;
-  if (!fw || !fh) return null;
-
-  canvas.width = fw; canvas.height = fh;
-  const ctx = canvas.getContext('2d', { willReadFrequently: true });
-  ctx.drawImage(video, 0, 0, fw, fh);
-  const { data } = ctx.getImageData(0, 0, fw, fh);
-
-  const cellW = Math.floor(fw / COLS);
-  const cellH = Math.floor(fh / ROWS);
-  const cells = new Array(COLS * ROWS).fill(null);
-  const counts = { bin: 0 };
-
-  for (let row = 0; row < ROWS; row++) {
-    for (let col = 0; col < COLS; col++) {
-      const x0 = col * cellW, y0 = row * cellH;
-      let sumY = 0, sumU = 0, sumV = 0, cnt = 0;
-      for (let py = y0; py < Math.min(y0 + cellH, fh); py += 5) {
-        for (let px = x0; px < Math.min(x0 + cellW, fw); px += 5) {
-          const i = (py * fw + px) * 4;
-          const { Y, U, V } = rgbToYuv(data[i], data[i+1], data[i+2]);
-          sumY += Y; sumU += U; sumV += V; cnt++;
-        }
-      }
-      if (!cnt) continue;
-      const c = classifyCell(sumY/cnt, sumU/cnt, sumV/cnt);
-      cells[row * COLS + col] = c;
-      if (c) counts[c]++;
-    }
-  }
-
-  // Dominant type
-  let dominant = null, domCount = 0;
-  for (const [t, n] of Object.entries(counts)) {
-    if (n > domCount) { dominant = t; domCount = n; }
-  }
-
-  // Check 1: minimum coverage (22%)
-  if (!dominant || domCount / (COLS * ROWS) < MIN_COVER) return null;
-
-  // Bounding box
-  let minC = COLS, maxC = 0, minR = ROWS, maxR = 0;
-  cells.forEach((c, i) => {
-    if (c !== dominant) return;
-    const col = i % COLS, row = Math.floor(i / COLS);
-    if (col < minC) minC = col; if (col > maxC) maxC = col;
-    if (row < minR) minR = row; if (row > maxR) maxR = row;
-  });
-  const spanW = maxC - minC + 1, spanH = maxR - minR + 1;
-
-  // Check 2: height span (35%)
-  if (spanH / ROWS < MIN_HEIGHT) return null;
-
-  // Check 3: aspect ratio
-  if (spanH > 0 && spanW / spanH > MAX_ASPECT) return null;
-
-  // Check 4: all 4 quadrants must have matching pixels
-  const mC = Math.floor((minC + maxC) / 2), mR = Math.floor((minR + maxR) / 2);
-  const quads = [[minC,minR,mC,mR],[mC,minR,maxC,mR],[minC,mR,mC,maxR],[mC,mR,maxC,maxR]];
-  let filled = 0;
-  for (const [c0,r0,c1,r1] of quads) {
-    let ok = false;
-    for (let r = r0; r <= r1 && !ok; r++)
-      for (let c = c0; c <= c1 && !ok; c++)
-        if (cells[r * COLS + c] === dominant) ok = true;
-    if (ok) filled++;
-  }
-  if (filled < MIN_QUADS) return null;
-
-  return dominant;
-}
 
 // ══════════════════════════════════════════════════════════════════════════════
 export default function ScanBinPage({ binId, binData, onComplete, onCancel }) {

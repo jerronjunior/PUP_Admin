@@ -22,55 +22,10 @@ import {
 import { ref as storageRef, uploadBytes, getDownloadURL } from 'firebase/storage';
 import useMediaQuery from '../hooks/useMediaQuery';
 
-// ════════════════════════════════════════════════════════════════════════════
-// YUV BIN DETECTION (mirrors scan_bin_screen.dart _BinDetector)
-// ════════════════════════════════════════════════════════════════════════════
-const COLS=16,ROWS=12,LOCK_FRAMES=8,MIN_COVER=0.15,MIN_HEIGHT=0.30,MAX_ASPECT=1.8,MIN_QUADS=3;
+import { COLS, ROWS, LOCK_FRAMES, MIN_COVER, MIN_HEIGHT, MAX_ASPECT, MIN_QUADS, rgbToYuv, classifyCell, detectBinInFrame } from '../lib/binDetectionModel';
 
 const BIN_TYPE = { value:'bin', label:'Recycling Bin', emoji:'♻️', color:'#2E7D32' };
 const getBT = () => BIN_TYPE;
-
-function yuv(r,g,b){return{Y:0.299*r+0.587*g+0.114*b,U:-0.169*r-0.331*g+0.500*b+128,V:0.500*r-0.419*g-0.081*b+128};}
-function classifyCell(Y,U,V){
-  if(Y>=40&&Y<=130&&V>=150&&V<=220&&U>=70 &&U<=122)return true;
-  if(Y>=40&&Y<=145&&V>=80 &&V<=132&&U>=132&&U<=195)return true;
-  if(Y>=18&&Y<=90 &&V>=102&&V<=140&&U>=122&&U<=165)return true;
-  return false;
-}
-function detectBinColor(canvas,video){
-  const fw=video.videoWidth,fh=video.videoHeight;
-  if(!fw||!fh)return null;
-  canvas.width=fw;canvas.height=fh;
-  const ctx=canvas.getContext('2d',{willReadFrequently:true});
-  ctx.drawImage(video,0,0,fw,fh);
-  const{data}=ctx.getImageData(0,0,fw,fh);
-  const cw=Math.floor(fw/COLS),ch=Math.floor(fh/ROWS);
-  const cells=new Array(COLS*ROWS).fill(false);
-  let binCount=0;
-  for(let r=0;r<ROWS;r++)for(let c=0;c<COLS;c++){
-    let sY=0,sU=0,sV=0,n=0;
-    for(let y=r*ch;y<Math.min((r+1)*ch,fh);y+=5)
-      for(let x=c*cw;x<Math.min((c+1)*cw,fw);x+=5){
-        const i=(y*fw+x)*4,{Y,U,V}=yuv(data[i],data[i+1],data[i+2]);
-        sY+=Y;sU+=U;sV+=V;n++;
-      }
-    if(!n)continue;
-    const isBin=classifyCell(sY/n,sU/n,sV/n);
-    cells[r*COLS+c]=isBin;
-    if(isBin)binCount++;
-  }
-  if(binCount/(COLS*ROWS)<MIN_COVER)return null;
-  let minC=COLS,maxC=0,minR=ROWS,maxR=0;
-  cells.forEach((isBin,i)=>{if(!isBin)return;const c=i%COLS,r=Math.floor(i/COLS);if(c<minC)minC=c;if(c>maxC)maxC=c;if(r<minR)minR=r;if(r>maxR)maxR=r;});
-  const sW=maxC-minC+1,sH=maxR-minR+1;
-  if(sH/ROWS<MIN_HEIGHT||sH>0&&sW/sH>MAX_ASPECT)return null;
-  const mC=Math.floor((minC+maxC)/2),mR=Math.floor((minR+maxR)/2);
-  let filled=0;
-  for(const[c0,r0,c1,r1]of[[minC,minR,mC,mR],[mC,minR,maxC,mR],[minC,mR,mC,maxR],[mC,mR,maxC,maxR]]){
-    let ok=false;for(let r=r0;r<=r1&&!ok;r++)for(let c=c0;c<=c1&&!ok;c++)if(cells[r*COLS+c])ok=true;if(ok)filled++;
-  }
-  return filled>=MIN_QUADS?'bin':null;
-}
 
 // ════════════════════════════════════════════════════════════════════════════
 // STEP 1 — ScanBinStep (mirrors ScanBinScreen + AdminAddBinFlowScreen Step 1)
@@ -104,7 +59,7 @@ function ScanBinStep({ onDetected, onCancel }) {
     timerRef.current=setInterval(()=>{
       const v=videoRef.current,c=canvasRef.current;
       if(!v||!v.videoWidth)return;
-      const result=detectBinColor(c,v);
+      const result=detectBinInFrame(c,v);
       if(result){
         streakR.current++;setStreak(streakR.current);
         const rem=LOCK_FRAMES-streakR.current;
