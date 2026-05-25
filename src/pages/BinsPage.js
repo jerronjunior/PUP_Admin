@@ -27,20 +27,15 @@ import useMediaQuery from '../hooks/useMediaQuery';
 // ════════════════════════════════════════════════════════════════════════════
 const COLS=16,ROWS=12,LOCK_FRAMES=8,MIN_COVER=0.15,MIN_HEIGHT=0.30,MAX_ASPECT=1.8,MIN_QUADS=3;
 
-const BIN_TYPES = [
-  { value:'coca_cola',    label:'Coca-Cola Give Back Life', emoji:'🔴', color:'#E53935' },
-  { value:'cargills',     label:'Cargills Food City',       emoji:'🔴', color:'#C62828' },
-  { value:'keells',       label:'Keells Plasticcycle',      emoji:'🟢', color:'#2E7D32' },
-  { value:'eco_spindles', label:'Eco Spindles',             emoji:'🟣', color:'#6A1B9A' },
-];
-const getBT = v => BIN_TYPES.find(t=>t.value===v) || BIN_TYPES[0];
+const BIN_TYPE = { value:'bin', label:'Recycling Bin', emoji:'♻️', color:'#2E7D32' };
+const getBT = () => BIN_TYPE;
 
 function yuv(r,g,b){return{Y:0.299*r+0.587*g+0.114*b,U:-0.169*r-0.331*g+0.500*b+128,V:0.500*r-0.419*g-0.081*b+128};}
 function classifyCell(Y,U,V){
-  if(Y>=40&&Y<=130&&V>=150&&V<=220&&U>=70 &&U<=122)return'coca_cola';
-  if(Y>=40&&Y<=145&&V>=80 &&V<=132&&U>=132&&U<=195)return'keells';
-  if(Y>=18&&Y<=90 &&V>=102&&V<=140&&U>=122&&U<=165)return'eco_spindles';
-  return null;
+  if(Y>=40&&Y<=130&&V>=150&&V<=220&&U>=70 &&U<=122)return true;
+  if(Y>=40&&Y<=145&&V>=80 &&V<=132&&U>=132&&U<=195)return true;
+  if(Y>=18&&Y<=90 &&V>=102&&V<=140&&U>=122&&U<=165)return true;
+  return false;
 }
 function detectBinColor(canvas,video){
   const fw=video.videoWidth,fh=video.videoHeight;
@@ -50,8 +45,8 @@ function detectBinColor(canvas,video){
   ctx.drawImage(video,0,0,fw,fh);
   const{data}=ctx.getImageData(0,0,fw,fh);
   const cw=Math.floor(fw/COLS),ch=Math.floor(fh/ROWS);
-  const cells=new Array(COLS*ROWS).fill(null);
-  const counts={coca_cola:0,keells:0,eco_spindles:0};
+  const cells=new Array(COLS*ROWS).fill(false);
+  let binCount=0;
   for(let r=0;r<ROWS;r++)for(let c=0;c<COLS;c++){
     let sY=0,sU=0,sV=0,n=0;
     for(let y=r*ch;y<Math.min((r+1)*ch,fh);y+=5)
@@ -60,22 +55,21 @@ function detectBinColor(canvas,video){
         sY+=Y;sU+=U;sV+=V;n++;
       }
     if(!n)continue;
-    const t=classifyCell(sY/n,sU/n,sV/n);
-    cells[r*COLS+c]=t;if(t)counts[t]++;
+    const isBin=classifyCell(sY/n,sU/n,sV/n);
+    cells[r*COLS+c]=isBin;
+    if(isBin)binCount++;
   }
-  let dom=null,domN=0;
-  for(const[t,n]of Object.entries(counts))if(n>domN){dom=t;domN=n;}
-  if(!dom||domN/(COLS*ROWS)<MIN_COVER)return null;
+  if(binCount/(COLS*ROWS)<MIN_COVER)return null;
   let minC=COLS,maxC=0,minR=ROWS,maxR=0;
-  cells.forEach((t,i)=>{if(t!==dom)return;const c=i%COLS,r=Math.floor(i/COLS);if(c<minC)minC=c;if(c>maxC)maxC=c;if(r<minR)minR=r;if(r>maxR)maxR=r;});
+  cells.forEach((isBin,i)=>{if(!isBin)return;const c=i%COLS,r=Math.floor(i/COLS);if(c<minC)minC=c;if(c>maxC)maxC=c;if(r<minR)minR=r;if(r>maxR)maxR=r;});
   const sW=maxC-minC+1,sH=maxR-minR+1;
   if(sH/ROWS<MIN_HEIGHT||sH>0&&sW/sH>MAX_ASPECT)return null;
   const mC=Math.floor((minC+maxC)/2),mR=Math.floor((minR+maxR)/2);
   let filled=0;
   for(const[c0,r0,c1,r1]of[[minC,minR,mC,mR],[mC,minR,maxC,mR],[minC,mR,mC,maxR],[mC,mR,maxC,maxR]]){
-    let ok=false;for(let r=r0;r<=r1&&!ok;r++)for(let c=c0;c<=c1&&!ok;c++)if(cells[r*COLS+c]===dom)ok=true;if(ok)filled++;
+    let ok=false;for(let r=r0;r<=r1&&!ok;r++)for(let c=c0;c<=c1&&!ok;c++)if(cells[r*COLS+c])ok=true;if(ok)filled++;
   }
-  return filled>=MIN_QUADS?dom:null;
+  return filled>=MIN_QUADS?'bin':null;
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -86,7 +80,6 @@ function ScanBinStep({ onDetected, onCancel }) {
   const [status,    setStatus]    = useState('Starting camera…');
   const [camErr,    setCamErr]    = useState('');
   const [streak,    setStreak]    = useState(0);
-  const [candidate, setCandidate] = useState(null);
   const [camReady,  setCamReady]  = useState(false);
 
   const videoRef    = useRef(null);
@@ -94,7 +87,6 @@ function ScanBinStep({ onDetected, onCancel }) {
   const streamRef   = useRef(null);
   const timerRef    = useRef(null);
   const streakR     = useRef(0);
-  const candidateR  = useRef(null);
   const startedRef  = useRef(false);
 
   const stop = useCallback(()=>{
@@ -108,33 +100,35 @@ function ScanBinStep({ onDetected, onCancel }) {
 
   const startLoop = useCallback(()=>{
     clearInterval(timerRef.current);
-    streakR.current=0;candidateR.current=null;
+    streakR.current=0;
     timerRef.current=setInterval(()=>{
       const v=videoRef.current,c=canvasRef.current;
       if(!v||!v.videoWidth)return;
       const result=detectBinColor(c,v);
       if(result){
-        if(result===candidateR.current){
-          streakR.current++;setStreak(streakR.current);setCandidate(result);
-          const bt=getBT(result),rem=LOCK_FRAMES-streakR.current;
-          setStatus(rem>0?`${bt.emoji} ${bt.label} — hold steady (${rem})`:`✅ ${bt.label} confirmed!`);
-          if(streakR.current>=LOCK_FRAMES){
-            const v = videoRef.current;
-            const c = document.createElement('canvas');
-            if(v && v.videoWidth) {
-              c.width = v.videoWidth; c.height = v.videoHeight;
-              c.getContext('2d').drawImage(v, 0, 0, c.width, c.height);
-              c.toBlob(blob => {
-                const file = new File([blob], `bin-${Date.now()}.jpg`, {type: 'image/jpeg'});
-                clearInterval(timerRef.current); stop(); onDetected(result, file);
-              }, 'image/jpeg', 0.92);
-            } else {
-              clearInterval(timerRef.current); stop(); onDetected(result, null);
-            }
+        streakR.current++;setStreak(streakR.current);
+        const rem=LOCK_FRAMES-streakR.current;
+        setStatus(rem>0?`♻️ Bin detected — hold steady (${rem})`:'✅ Bin confirmed!');
+        if(streakR.current>=LOCK_FRAMES){
+          const v = videoRef.current;
+          const c = document.createElement('canvas');
+          if(v && v.videoWidth) {
+            c.width = v.videoWidth; c.height = v.videoHeight;
+            c.getContext('2d').drawImage(v, 0, 0, c.width, c.height);
+            c.toBlob(blob => {
+              const file = new File([blob], `bin-${Date.now()}.jpg`, {type: 'image/jpeg'});
+              clearInterval(timerRef.current); stop(); onDetected('bin', file);
+            }, 'image/jpeg', 0.92);
+          } else {
+            clearInterval(timerRef.current); stop(); onDetected('bin', null);
           }
-        }else{candidateR.current=result;streakR.current=1;setStreak(1);setCandidate(result);setStatus(`${getBT(result).emoji} ${getBT(result).label} — hold steady…`);}
+        }
       }else{
-        if(streakR.current>0){streakR.current=0;candidateR.current=null;setStreak(0);setCandidate(null);setStatus('🔍 Point camera at the bin…');}
+        if(streakR.current>0){
+          streakR.current=0;
+          setStreak(0);
+          setStatus('🔍 Point camera at the bin…');
+        }
       }
     },350);
   },[stop,onDetected]);
@@ -163,22 +157,21 @@ function ScanBinStep({ onDetected, onCancel }) {
 
   useEffect(()=>{const t=setTimeout(()=>startCamera(),100);return()=>clearTimeout(t);},[]);
 
-  const bt=candidate?getBT(candidate):null;
   const pct=Math.min(100,(streak/LOCK_FRAMES)*100);
 
   return(
     <div style={M.stepWrap}>
       <div style={M.stepTitle}>Step 1 of 2 — Scan Bin</div>
-      <div style={M.stepSub}>Point camera at the recycling bin to detect its type automatically</div>
+      <div style={M.stepSub}>Point camera at the recycling bin to detect it automatically</div>
 
       {/* Status */}
-      <div style={{...M.statusPill,background:bt?bt.color+'18':'#f1f8e9',color:bt?bt.color:'#2E7D32',borderColor:bt?bt.color+'55':'#c8e6c9'}}>
+      <div style={{...M.statusPill,background:'#f1f8e9',color:'#2E7D32',borderColor:'#c8e6c9'}}>
         {status}
       </div>
 
       {/* Progress */}
       {streak>0&&streak<LOCK_FRAMES&&(
-        <div style={M.progWrap}><div style={{...M.progBar,width:pct+'%',background:bt?.color||'#2E7D32'}}/></div>
+        <div style={M.progWrap}><div style={{...M.progBar,width:pct+'%',background:'#2E7D32'}}/></div>
       )}
 
       {/* Video */}
@@ -193,7 +186,7 @@ function ScanBinStep({ onDetected, onCancel }) {
 
       {camErr&&<div style={M.errBox}>{camErr}<button onClick={()=>{startedRef.current=false;startCamera();}} style={M.retryBtn}>Retry</button></div>}
 
-      <div style={M.hint}>Hold the camera steady in front of the bin. Auto-detects 🔴 🟢 🟣</div>
+      <div style={M.hint}>Hold the camera steady in front of the bin for auto-capture.</div>
     </div>
   );
 }
@@ -211,7 +204,7 @@ function AddBinFormStep({ binType, existingBin, scannedFile, onSaved, onBack }) 
     latitude:     existingBin?.latitude!=null?String(existingBin.latitude):'',
     longitude:    existingBin?.longitude!=null?String(existingBin.longitude):'',
     qrCode:       existingBin?.qrCode       || '',
-    binType:      existingBin?.binType      || binType || 'eco_spindles',
+    binType:      existingBin?.binType      || binType || 'bin',
   });
   const [searchQ,  setSearchQ]  = useState('');
   const [searching,setSearching]= useState(false);
@@ -294,7 +287,7 @@ function AddBinFormStep({ binType, existingBin, scannedFile, onSaved, onBack }) 
     ?`https://www.openstreetmap.org/export/embed.html?bbox=${parseFloat(form.longitude)-.006},${parseFloat(form.latitude)-.004},${parseFloat(form.longitude)+.006},${parseFloat(form.latitude)+.004}&layer=mapnik&marker=${form.latitude},${form.longitude}`
     :null;
 
-  const bt=getBT(form.binType);
+  const bt=getBT();
 
   return(
     <form onSubmit={handleSubmit} style={M.stepWrap}>
@@ -302,18 +295,13 @@ function AddBinFormStep({ binType, existingBin, scannedFile, onSaved, onBack }) 
 
       {saveErr && <div style={M.errBox}>{saveErr}</div>}
 
-      {/* Scanned bin type badge — mirrors widget.scannedBinType card in Flutter */}
+      {/* Scanned bin badge */}
       <div style={{...M.scannedBadge,background:bt.color+'15',borderColor:bt.color+'44'}}>
         <span style={{fontSize:22}}>{bt.emoji}</span>
         <div>
-          <div style={{fontSize:11,color:'#4CAF50',fontWeight:700}}>Bin Type Detected</div>
+          <div style={{fontSize:11,color:'#4CAF50',fontWeight:700}}>Bin Detected</div>
           <div style={{fontWeight:700,fontSize:14,color:bt.color}}>{bt.label}</div>
         </div>
-        {/* Allow changing type for edit mode */}
-        <select style={{marginLeft:'auto',padding:'4px 8px',borderRadius:7,border:'1px solid #ddd',fontSize:12}}
-          value={form.binType} onChange={e=>update('binType',e.target.value)}>
-          {BIN_TYPES.map(t=><option key={t.value} value={t.value}>{t.emoji} {t.label}</option>)}
-        </select>
       </div>
 
       {/* Location search — mirrors _searchLocation() in Flutter */}
@@ -468,7 +456,7 @@ export default function BinsPage() {
       ):(
         <div style={{display:'flex',flexDirection:'column',gap:12}}>
           {filtered.map(bin=>{
-            const bt=getBT(bin.binType);
+            const bt=getBT();
             return(
               <div key={bin.id} style={{...L.card,...(isMobile?{flexWrap:'wrap'}:{})}}>
                 {bin.photoUrl
