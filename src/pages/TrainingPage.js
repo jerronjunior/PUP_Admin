@@ -8,7 +8,7 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { db } from '../firebase';
 import {
-  collection, onSnapshot, doc, updateDoc,
+  collection, onSnapshot, doc, updateDoc, setDoc, serverTimestamp,
   query, where, orderBy, limit, getCountFromServer,
 } from 'firebase/firestore';
 
@@ -35,7 +35,10 @@ export default function TrainingPage() {
   const [toast,       setToast]       = useState('');
   const [totalCount,  setTotalCount]  = useState(0);
   const [page,        setPage]        = useState(0);           // simple pagination
+  const [modelVersion, setModelVersion] = useState('1');
+  const [modelVersionSaving, setModelVersionSaving] = useState(false);
   const PAGE_SIZE = 20;
+  const MODEL_CONFIG_REF = doc(db, 'model_config', 'bin');
 
   const showToast = msg => { setToast(msg); setTimeout(() => setToast(''), 3000); };
 
@@ -56,6 +59,21 @@ export default function TrainingPage() {
         setLoading(false);
       },
       err => { console.error(err); setLoading(false); }
+    );
+    return unsub;
+  }, []);
+
+  useEffect(() => {
+    const unsub = onSnapshot(
+      MODEL_CONFIG_REF,
+      snap => {
+        const data = snap.exists() ? snap.data() : null;
+        const version = data?.currentVersion;
+        setModelVersion(version !== undefined && version !== null && version !== '' ? String(version) : '1');
+      },
+      err => {
+        console.warn('Failed to load model version:', err?.message || err);
+      }
     );
     return unsub;
   }, []);
@@ -132,6 +150,23 @@ export default function TrainingPage() {
     }
   };
 
+  const bumpModelVersion = async () => {
+    setModelVersionSaving(true);
+    try {
+      const current = Number(modelVersion);
+      const nextVersion = Number.isFinite(current) ? current + 1 : 2;
+      await setDoc(MODEL_CONFIG_REF, {
+        currentVersion: nextVersion,
+        updatedAt: serverTimestamp(),
+      }, { merge: true });
+      showToast(`✅ Model version bumped to ${nextVersion}`);
+    } catch (e) {
+      showToast('❌ Error: ' + e.message);
+    } finally {
+      setModelVersionSaving(false);
+    }
+  };
+
   const verifiedCount   = Object.values(stats).reduce((a,b) => a+b, 0);
   const unverifiedCount = samples.filter(s => !s.verified && !s.rejected).length;
 
@@ -155,6 +190,12 @@ export default function TrainingPage() {
           Images collected from users when they scan bins and bottles.
           Review and approve samples, then run <code style={s.code}>retrain.py</code> to improve the model.
         </p>
+        <div style={s.versionRow}>
+          <span style={s.versionBadge}>Model version: {modelVersion}</span>
+          <button type="button" onClick={bumpModelVersion} disabled={modelVersionSaving} style={s.versionBtn}>
+            {modelVersionSaving ? 'Bumping…' : 'Bump after retrain'}
+          </button>
+        </div>
       </div>
 
       {/* Stats cards */}
@@ -257,6 +298,7 @@ export default function TrainingPage() {
           <li>The model cannot train <b>on-device</b> — TFLite only runs predictions, not training.</li>
           <li>Training happens on your computer using the <code style={s.code}>retrain.py</code> script.</li>
           <li>The script downloads verified images from Firebase, retrains, and pushes the new model back automatically.</li>
+          <li>After a successful retrain, click <b>Bump after retrain</b> so new scans get tagged with the next model version.</li>
           <li>After retraining, Firebase Remote Config is updated — users get the new model on next app launch.</li>
           <li>Minimum <b>50 verified samples</b> recommended before retraining for meaningful improvement.</li>
           <li>Run retraining <b>weekly or monthly</b> as more samples accumulate.</li>
@@ -395,6 +437,9 @@ const s = {
   h1:            { margin:'0 0 4px', fontSize:28, fontWeight:800, color:'#1B5E20' },
   sub:           { margin:0, color:'#888', fontSize:14, lineHeight:1.6 },
   code:          { background:'#f0f4f8', padding:'1px 6px', borderRadius:4, fontSize:12, fontFamily:'monospace' },
+  versionRow:    { display:'flex', alignItems:'center', gap:10, marginTop:12, flexWrap:'wrap' },
+  versionBadge:  { display:'inline-flex', alignItems:'center', padding:'6px 10px', borderRadius:999, background:'#E8F5E9', color:'#1B5E20', fontSize:12, fontWeight:800, border:'1px solid #C8E6C9' },
+  versionBtn:    { padding:'7px 12px', borderRadius:8, border:'1px solid #1B5E20', background:'#fff', color:'#1B5E20', cursor:'pointer', fontSize:12, fontWeight:700 },
   toast:         { position:'fixed', top:20, right:20, background:'#1B5E20', color:'#fff', padding:'12px 20px', borderRadius:10, fontSize:13, fontWeight:600, zIndex:9999, boxShadow:'0 4px 20px rgba(0,0,0,.2)' },
   statsGrid:     { display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:14, marginBottom:18 },
   statCard:      { background:'#fff', borderRadius:12, padding:'16px 18px', boxShadow:'0 2px 10px rgba(0,0,0,.06)', display:'flex', alignItems:'center', gap:14 },

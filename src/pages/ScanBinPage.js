@@ -1,7 +1,7 @@
 // src/pages/ScanBinPage.js
 import React, { useEffect, useState, useRef, useCallback } from 'react';
-import { db, storage } from '../firebase';
-import { doc, updateDoc } from 'firebase/firestore';
+import { db, storage, auth } from '../firebase';
+import { doc, updateDoc, addDoc, collection, serverTimestamp, onSnapshot } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import useMediaQuery from '../hooks/useMediaQuery';
 
@@ -26,6 +26,7 @@ export default function ScanBinPage({ binId, binData, onComplete, onCancel }) {
   const [lockStreak,   setLockStreak]  = useState(0);
   const [photoPreview, setPhotoPreview]= useState('');
   const [saving,       setSaving]      = useState(false);
+  const [modelVersion, setModelVersion]= useState(process.env.REACT_APP_BIN_MODEL_VERSION || '1');
 
   const videoRef      = useRef(null);
   const detectCanvas  = useRef(null);
@@ -35,6 +36,23 @@ export default function ScanBinPage({ binId, binData, onComplete, onCancel }) {
   const photoFileRef  = useRef(null);
   const streakRef     = useRef(0);
   const candidateRef  = useRef(null);
+
+  useEffect(() => {
+    const unsub = onSnapshot(
+      doc(db, 'model_config', 'bin'),
+      snap => {
+        const data = snap.exists() ? snap.data() : null;
+        const currentVersion = data?.currentVersion;
+        if (currentVersion !== undefined && currentVersion !== null && currentVersion !== '') {
+          setModelVersion(String(currentVersion));
+        }
+      },
+      err => {
+        console.warn('Failed to load model version:', err?.message || err);
+      }
+    );
+    return unsub;
+  }, []);
 
   const stopCamera = useCallback(() => {
     if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
@@ -217,10 +235,42 @@ export default function ScanBinPage({ binId, binData, onComplete, onCancel }) {
       const sRef = ref(storage, `bin_photos/${binId}-${Date.now()}.jpg`);
       await uploadBytes(sRef, file);
       const photoUrl = await getDownloadURL(sRef);
+
+      // Attempt to get a model score from the client model (optional)
+      let predictedScore = null;
+      try {
+        await loadClientModel();
+        const c = captureCanvas.current;
+        if (c) {
+          const score = await predictCanvas(c, 224);
+          if (score !== null) predictedScore = score;
+        }
+      } catch (e) {
+        console.warn('Model score unavailable:', e?.message || e);
+      }
+
+      // Save photo URL to the bin document
       await updateDoc(doc(db, 'bins', targetDocId), {
         photoUrl,
         ...(detectedType ? { binType: detectedType } : {}),
       });
+
+      // Also add to training_samples so admin scans improve the model
+      try {
+        await addDoc(collection(db, 'training_samples'), {
+          imageUrl: photoUrl,
+          predictedLabel: detectedType || 'bin',
+          predictedScore: predictedScore,
+          source: 'admin_scan',
+          binId: binId,
+          verified: true,
+          verifiedBy: auth?.currentUser?.uid || 'admin',
+          modelVersion: modelVersion,
+          timestamp: serverTimestamp(),
+        });
+      } catch (e) {
+        console.warn('Failed to save training sample:', e?.message || e);
+      }
       setPhase('saved');
       setTimeout(() => onComplete?.(), 1500);
     } catch (err) {
