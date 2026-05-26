@@ -1,11 +1,11 @@
 // src/pages/ScanBinPage.js
 import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { db, storage, auth } from '../firebase';
-import { doc, updateDoc, addDoc, collection, serverTimestamp, onSnapshot } from 'firebase/firestore';
+import { doc, updateDoc, onSnapshot } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import useMediaQuery from '../hooks/useMediaQuery';
 
-import { COLS, ROWS, LOCK_FRAMES, MIN_COVER, MIN_HEIGHT, MAX_ASPECT, MIN_QUADS, rgbToYuv, classifyCell, detectBinInFrame } from '../lib/binDetectionModel';
+import { COLS, ROWS, LOCK_FRAMES, MIN_COVER, MIN_HEIGHT, MAX_ASPECT, MIN_QUADS, rgbToYuv, classifyCell, detectBinInFrame, saveTrainingSample } from '../lib/binDetectionModel';
 import { loadClientModel, predictCanvas, predictBlobViaServer } from '../lib/binModelClient';
 
 // ── Bin types ─────────────────────────────────────────────────────────────
@@ -255,22 +255,13 @@ export default function ScanBinPage({ binId, binData, onComplete, onCancel }) {
         ...(detectedType ? { binType: detectedType } : {}),
       });
 
-      // Also add to training_samples so admin scans improve the model
-      try {
-        await addDoc(collection(db, 'training_samples'), {
-          imageUrl: photoUrl,
-          predictedLabel: detectedType || 'bin',
-          predictedScore: predictedScore,
-          source: 'admin_scan',
-          binId: binId,
-          verified: true,
-          verifiedBy: auth?.currentUser?.uid || 'admin',
-          modelVersion: modelVersion,
-          timestamp: serverTimestamp(),
-        });
-      } catch (e) {
-        console.warn('Failed to save training sample:', e?.message || e);
-      }
+      await saveTrainingSample(file, detectedType || 'bin', {
+        predictedLabel: detectedType || 'bin',
+        predictedScore,
+        binId,
+        verifiedBy: auth?.currentUser?.uid || 'admin',
+        modelVersion,
+      });
       setPhase('saved');
       setTimeout(() => onComplete?.(), 1500);
     } catch (err) {

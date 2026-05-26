@@ -1,6 +1,11 @@
 // src/lib/binDetectionModel.js
 // Shared bin detection model (ported from provided model snippet)
 
+import { db, storage } from '../firebase';
+import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
+import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { getAuth } from 'firebase/auth';
+
 export const COLS = 16;
 export const ROWS = 12;
 export const LOCK_FRAMES = 15;
@@ -141,4 +146,62 @@ export function measureFrameMotion(previousFrame, currentFrame, width, height) {
   }
 
   return samples ? total / samples : 0;
+}
+
+function compressImage(blob, maxW, maxH, quality) {
+  return new Promise(resolve => {
+    const img = new Image();
+    const url = URL.createObjectURL(blob);
+
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      const scale = Math.min(1, maxW / img.width, maxH / img.height);
+      const width = Math.round(img.width * scale);
+      const height = Math.round(img.height * scale);
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      canvas.getContext('2d').drawImage(img, 0, 0, width, height);
+      canvas.toBlob(resolve, 'image/jpeg', quality);
+    };
+
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      resolve(blob);
+    };
+
+    img.src = url;
+  });
+}
+
+export async function saveTrainingSample(imageBlob, label = 'bin', metadata = {}) {
+  try {
+    const auth = getAuth();
+    const uid = auth.currentUser?.uid || 'admin';
+    const timestamp = Date.now();
+    const storagePath = `training_data/${label}/${uid}_${timestamp}.jpg`;
+    const compressed = await compressImage(imageBlob, 320, 240, 0.70);
+
+    const imgRef = ref(storage, storagePath);
+    await uploadBytes(imgRef, compressed);
+
+    const imageUrl = await getDownloadURL(imgRef);
+
+    await addDoc(collection(db, 'training_samples'), {
+      label,
+      imageUrl,
+      storagePath,
+      userId: uid,
+      source: 'admin_scan',
+      verified: true,
+      modelWasCorrect: true,
+      timestamp: serverTimestamp(),
+      ...metadata,
+    });
+
+    return { imageUrl, storagePath };
+  } catch (err) {
+    console.warn('[Training] Failed to save sample:', err?.message || err);
+    return null;
+  }
 }

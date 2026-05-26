@@ -4,6 +4,10 @@ const admin = require('firebase-admin');
 admin.initializeApp();
 const db = admin.firestore();
 
+const { cleanupTrainingData } = require('./cleanup_training_data');
+
+exports.cleanupTrainingData = cleanupTrainingData;
+
 // Triggered when a notification doc is created in 'notifications' collection.
 // Expects the document to contain at least: { userId, title, subtitle }
 exports.sendNotificationOnCreate = functions.firestore
