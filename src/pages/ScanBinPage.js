@@ -1,8 +1,7 @@
 // src/pages/ScanBinPage.js
 import React, { useEffect, useState, useRef, useCallback } from 'react';
-import { db, storage, auth } from '../firebase';
+import { db, auth } from '../firebase';
 import { doc, updateDoc, onSnapshot } from 'firebase/firestore';
-import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import useMediaQuery from '../hooks/useMediaQuery';
 
 import { COLS, ROWS, LOCK_FRAMES, MIN_COVER, MIN_HEIGHT, MAX_ASPECT, MIN_QUADS, rgbToYuv, classifyCell, detectBinInFrame, saveTrainingSample } from '../lib/binDetectionModel';
@@ -232,10 +231,6 @@ export default function ScanBinPage({ binId, binData, onComplete, onCancel }) {
     }
     setSaving(true);
     try {
-      const sRef = ref(storage, `bin_photos/${binId}-${Date.now()}.jpg`);
-      await uploadBytes(sRef, file);
-      const photoUrl = await getDownloadURL(sRef);
-
       // Attempt to get a model score from the client model (optional)
       let predictedScore = null;
       try {
@@ -249,18 +244,22 @@ export default function ScanBinPage({ binId, binData, onComplete, onCancel }) {
         console.warn('Model score unavailable:', e?.message || e);
       }
 
-      // Save photo URL to the bin document
-      await updateDoc(doc(db, 'bins', targetDocId), {
-        photoUrl,
-        ...(detectedType ? { binType: detectedType } : {}),
-      });
-
-      await saveTrainingSample(file, detectedType || 'bin', {
+      const trainingSample = await saveTrainingSample(file, detectedType || 'bin', {
         predictedLabel: detectedType || 'bin',
         predictedScore,
         binId,
         verifiedBy: auth?.currentUser?.uid || 'admin',
         modelVersion,
+      });
+
+      if (!trainingSample?.imageUrl) {
+        throw new Error('Training sample upload failed.');
+      }
+
+      // Save photo URL to the bin document
+      await updateDoc(doc(db, 'bins', targetDocId), {
+        photoUrl: trainingSample.imageUrl,
+        ...(detectedType ? { binType: detectedType } : {}),
       });
       setPhase('saved');
       setTimeout(() => onComplete?.(), 1500);
