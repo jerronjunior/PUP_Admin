@@ -1,22 +1,25 @@
 // src/lib/binDetectionModel.js
-// Shared bin detection model (ported from provided model snippet)
-
+// ─────────────────────────────────────────────────────────────────────────────
+// Bin detection model + auto training data collection
+// Every time admin confirms a bin scan, the image is saved to Firebase
+// as a training sample. Run retrain.py weekly to improve the model.
+// ─────────────────────────────────────────────────────────────────────────────
 import { db, storage } from '../firebase';
 import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
-import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { ref, uploadBytes } from 'firebase/storage';
 import { getAuth } from 'firebase/auth';
 
-export const COLS = 16;
-export const ROWS = 12;
-export const LOCK_FRAMES = 15;
-export const MIN_COVER = 0.22;
-export const MIN_HEIGHT = 0.35;
-export const MAX_ASPECT = 1.8;
-export const MIN_QUADS = 4;
-export const MIN_MOTION = 1.6;
-export const MOTION_SAMPLE_STEP = 12;
+// ── Detection constants ───────────────────────────────────────────────────────
+export const COLS            = 16;
+export const ROWS            = 12;
+export const LOCK_FRAMES     = 15;
+export const MIN_COVER       = 0.22;
+export const MIN_HEIGHT      = 0.35;
+export const MAX_ASPECT      = 1.8;
+export const MIN_QUADS       = 4;
+export const MIN_TEXTURE_STD = 12;
 
-// RGB -> YUV, also return R,G,B for pre-filter
+// ── RGB → YUV ─────────────────────────────────────────────────────────────────
 export function rgbToYuv(r, g, b) {
   return {
     Y:  0.299 * r + 0.587 * g + 0.114 * b,
@@ -26,7 +29,7 @@ export function rgbToYuv(r, g, b) {
   };
 }
 
-// classifyCell — two-stage filter (RGB prefilter + YUV fine filter)
+// ── classifyCell — two-stage filter ──────────────────────────────────────────
 export function classifyCell(Y, U, V, R, G, B) {
   const isGreenDominant = G > R * 1.30 && G > B * 1.05 && G > 75;
   const isRedDominant   = R > G * 1.40 && R > B * 1.50 && R > 80;
@@ -34,28 +37,22 @@ export function classifyCell(Y, U, V, R, G, B) {
 
   if (!isGreenDominant && !isRedDominant && !isPurplish) return null;
 
-  // RED bins
-  if (isRedDominant
-      && Y >= 39 && Y <= 144
-      && U >= 101 && U <= 124
-      && V >= 137 && V <= 197) return 'bin';
+  if (isRedDominant &&
+      Y >= 39 && Y <= 144 && U >= 101 && U <= 124 && V >= 137 && V <= 197)
+    return 'bin';
 
-  // GREEN bins
-  if (isGreenDominant
-      && Y >= 40 && Y <= 145
-      && U >= 112 && U <= 134
-      && V >= 88  && V <= 125) return 'bin';
+  if (isGreenDominant &&
+      Y >= 40 && Y <= 145 && U >= 112 && U <= 134 && V >= 88 && V <= 125)
+    return 'bin';
 
-  // PURPLE bins
-  if (isPurplish
-      && Y >= 18 && Y <= 90
-      && U >= 118 && U <= 160
-      && V >= 108 && V <= 145) return 'bin';
+  if (isPurplish &&
+      Y >= 18 && Y <= 90 && U >= 118 && U <= 160 && V >= 108 && V <= 145)
+    return 'bin';
 
   return null;
 }
 
-// detectBinInFrame: grid-based accumulation and checks
+// ── detectBinInFrame — 5 checks ───────────────────────────────────────────────
 export function detectBinInFrame(canvas, video) {
   const fw = video.videoWidth, fh = video.videoHeight;
   if (!fw || !fh) return null;
@@ -65,61 +62,66 @@ export function detectBinInFrame(canvas, video) {
   ctx.drawImage(video, 0, 0, fw, fh);
   const { data } = ctx.getImageData(0, 0, fw, fh);
 
-  const motion = measureFrameMotion(canvas.__binPrevFrame, data, fw, fh);
-  canvas.__binPrevFrame = data.slice();
-  if (motion < MIN_MOTION) return null;
-
   const cellW = Math.floor(fw / COLS);
   const cellH = Math.floor(fh / ROWS);
-  const cells = new Array(COLS * ROWS).fill(null);
-  const counts = { bin: 0 };
+  const cells  = new Array(COLS * ROWS).fill(null);
+  const counts = { bin: 0, _std: 0 };
 
   for (let row = 0; row < ROWS; row++) {
     for (let col = 0; col < COLS; col++) {
       const x0 = col * cellW, y0 = row * cellH;
-      let sumY=0, sumU=0, sumV=0, sumR=0, sumG=0, sumB=0, cnt=0;
-      for (let py = y0; py < Math.min(y0 + cellH, fh); py += 5) {
-        for (let px = x0; px < Math.min(x0 + cellW, fw); px += 5) {
-          const i = (py * fw + px) * 4;
+      let sumY=0, sumU=0, sumV=0, sumR=0, sumG=0, sumB=0, sumY2=0, cnt=0;
+      for (let py = y0; py < Math.min(y0+cellH, fh); py += 5) {
+        for (let px = x0; px < Math.min(x0+cellW, fw); px += 5) {
+          const i = (py*fw+px)*4;
           const yuv = rgbToYuv(data[i], data[i+1], data[i+2]);
           sumY+=yuv.Y; sumU+=yuv.U; sumV+=yuv.V;
-          sumR+=yuv.R; sumG+=yuv.G; sumB+=yuv.B; cnt++;
+          sumR+=yuv.R; sumG+=yuv.G; sumB+=yuv.B;
+          sumY2+=yuv.Y*yuv.Y; cnt++;
         }
       }
       if (!cnt) continue;
-      const c = classifyCell(sumY/cnt, sumU/cnt, sumV/cnt, sumR/cnt, sumG/cnt, sumB/cnt);
-      cells[row * COLS + col] = c;
-      if (c) counts[c]++;
+      const c = classifyCell(
+        sumY/cnt, sumU/cnt, sumV/cnt,
+        sumR/cnt, sumG/cnt, sumB/cnt
+      );
+      const cellStd = cnt>1
+        ? Math.sqrt(Math.max(0, sumY2/cnt - (sumY/cnt)*(sumY/cnt)))
+        : 0;
+      cells[row*COLS+col] = c;
+      if (c) { counts[c]++; counts._std += cellStd; }
     }
   }
-  // Dominant type
+
   let dominant = null, domCount = 0;
   for (const [t, n] of Object.entries(counts)) {
+    if (t.startsWith('_')) continue;
     if (n > domCount) { dominant = t; domCount = n; }
   }
+  if (!dominant || domCount / (COLS*ROWS) < MIN_COVER) return null;
 
-  if (!dominant || domCount / (COLS * ROWS) < MIN_COVER) return null;
+  // Anti-spoof
+  if ((counts._std / domCount) < MIN_TEXTURE_STD) return null;
 
-  let minC = COLS, maxC = 0, minR = ROWS, maxR = 0;
+  let minC=COLS, maxC=0, minR=ROWS, maxR=0;
   cells.forEach((c, i) => {
     if (c !== dominant) return;
-    const col = i % COLS, row = Math.floor(i / COLS);
-    if (col < minC) minC = col; if (col > maxC) maxC = col;
-    if (row < minR) minR = row; if (row > maxR) maxR = row;
+    const col = i%COLS, row = Math.floor(i/COLS);
+    if (col<minC) minC=col; if (col>maxC) maxC=col;
+    if (row<minR) minR=row; if (row>maxR) maxR=row;
   });
-  const spanW = maxC - minC + 1, spanH = maxR - minR + 1;
+  const spanW = maxC-minC+1, spanH = maxR-minR+1;
+  if (spanH/ROWS < MIN_HEIGHT) return null;
+  if (spanH>0 && spanW/spanH > MAX_ASPECT) return null;
 
-  if (spanH / ROWS < MIN_HEIGHT) return null;
-  if (spanH > 0 && spanW / spanH > MAX_ASPECT) return null;
-
-  const mC = Math.floor((minC + maxC) / 2), mR = Math.floor((minR + maxR) / 2);
-  const quads = [[minC,minR,mC,mR],[mC,minR,maxC,mR],[minC,mR,mC,maxR],[mC,mR,maxC,maxR]];
-  let filled = 0;
+  const mC=Math.floor((minC+maxC)/2), mR=Math.floor((minR+maxR)/2);
+  const quads=[[minC,minR,mC,mR],[mC,minR,maxC,mR],[minC,mR,mC,maxR],[mC,mR,maxC,maxR]];
+  let filled=0;
   for (const [c0,r0,c1,r1] of quads) {
-    let ok = false;
-    for (let r = r0; r <= r1 && !ok; r++)
-      for (let c = c0; c <= c1 && !ok; c++)
-        if (cells[r * COLS + c] === dominant) ok = true;
+    let ok=false;
+    for (let r=r0; r<=r1&&!ok; r++)
+      for (let c=c0; c<=c1&&!ok; c++)
+        if (cells[r*COLS+c]===dominant) ok=true;
     if (ok) filled++;
   }
   if (filled < MIN_QUADS) return null;
@@ -127,81 +129,63 @@ export function detectBinInFrame(canvas, video) {
   return dominant;
 }
 
-export function measureFrameMotion(previousFrame, currentFrame, width, height) {
-  if (!previousFrame || !currentFrame || previousFrame.length !== currentFrame.length) return 0;
 
-  let total = 0;
-  let samples = 0;
-  const step = Math.max(1, MOTION_SAMPLE_STEP);
-
-  for (let y = 0; y < height; y += step) {
-    for (let x = 0; x < width; x += step) {
-      const index = (y * width + x) * 4;
-      const dr = Math.abs(currentFrame[index] - previousFrame[index]);
-      const dg = Math.abs(currentFrame[index + 1] - previousFrame[index + 1]);
-      const db = Math.abs(currentFrame[index + 2] - previousFrame[index + 2]);
-      total += (dr + dg + db) / 3;
-      samples++;
-    }
-  }
-
-  return samples ? total / samples : 0;
-}
-
+// ── compressImage — resize + compress before uploading ────────────────────────
+// Keeps images small for training data. 320×240 at 70% JPEG = ~15-25KB
+// vs original 1280×960 at 92% = ~300-500KB. Saves 90% storage.
 function compressImage(blob, maxW, maxH, quality) {
   return new Promise(resolve => {
     const img = new Image();
     const url = URL.createObjectURL(blob);
-
     img.onload = () => {
       URL.revokeObjectURL(url);
       const scale = Math.min(1, maxW / img.width, maxH / img.height);
-      const width = Math.round(img.width * scale);
-      const height = Math.round(img.height * scale);
+      const w = Math.round(img.width  * scale);
+      const h = Math.round(img.height * scale);
       const canvas = document.createElement('canvas');
-      canvas.width = width;
-      canvas.height = height;
-      canvas.getContext('2d').drawImage(img, 0, 0, width, height);
+      canvas.width = w; canvas.height = h;
+      canvas.getContext('2d').drawImage(img, 0, 0, w, h);
       canvas.toBlob(resolve, 'image/jpeg', quality);
     };
-
-    img.onerror = () => {
-      URL.revokeObjectURL(url);
-      resolve(blob);
-    };
-
+    img.onerror = () => { URL.revokeObjectURL(url); resolve(blob); }; // fallback
     img.src = url;
   });
 }
 
-export async function saveTrainingSample(imageBlob, label = 'bin', metadata = {}) {
+// ── saveTrainingSample ────────────────────────────────────────────────────────
+// Called automatically after admin confirms a bin scan.
+// Uploads image to Firebase Storage + saves metadata to Firestore.
+// The retrain.py script downloads these later to improve the model.
+export async function saveTrainingSample(imageBlob, label = 'bin') {
   try {
     const auth = getAuth();
-    const uid = auth.currentUser?.uid || 'admin';
-    const timestamp = Date.now();
-    const storagePath = `training_data/${label}/${uid}_${timestamp}.jpg`;
+    const uid  = auth.currentUser?.uid || 'admin';
+    const ts   = Date.now();
+    const path = `training_data/${label}/${uid}_${ts}.jpg`;
+
+    // ── Compress before upload — reduces storage by 60-80% ────────────────
+    // Resize to 320×240 max (plenty for bin detection training)
+    // and compress JPEG to 70% quality before uploading.
     const compressed = await compressImage(imageBlob, 320, 240, 0.70);
 
-    const imgRef = ref(storage, storagePath);
+    // Upload compressed image to Storage
+    const imgRef = ref(storage, path);
     await uploadBytes(imgRef, compressed);
 
-    const imageUrl = await getDownloadURL(imgRef);
-
+    // Save metadata to Firestore training_samples collection
     await addDoc(collection(db, 'training_samples'), {
       label,
-      imageUrl,
-      storagePath,
-      userId: uid,
-      source: 'admin_scan',
-      verified: true,
+      storagePath:     path,
+      userId:          uid,
+      source:          'admin_scan',   // vs 'user_scan' from Flutter app
+      verified:        true,           // admin scans are trusted ground truth
       modelWasCorrect: true,
-      timestamp: serverTimestamp(),
-      ...metadata,
+      timestamp:       serverTimestamp(),
     });
 
-    return { imageUrl, storagePath };
+    console.log(`[Training] Saved sample: ${label} → ${path}`);
   } catch (err) {
-    console.warn('[Training] Failed to save sample:', err?.message || err);
-    return null;
+    // Never crash the UI for training data — it's background work
+    console.warn('[Training] Failed to save sample:', err.message);
   }
 }
