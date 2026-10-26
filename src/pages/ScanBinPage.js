@@ -1,13 +1,12 @@
 // src/pages/ScanBinPage.js
 import React, { useEffect, useState, useRef, useCallback } from 'react';
-import { db, auth } from '../firebase';
-import { doc, updateDoc, onSnapshot } from 'firebase/firestore';
+import { db, storage } from '../firebase';
+import { doc, updateDoc } from 'firebase/firestore';
+import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import useMediaQuery from '../hooks/useMediaQuery';
+import { BinDetector, LOCK_FRAMES } from '../lib/binDetectionModel';
 
-import { COLS, ROWS, LOCK_FRAMES, MIN_COVER, MIN_HEIGHT, MAX_ASPECT, MIN_QUADS, rgbToYuv, classifyCell, detectBinInFrame, saveTrainingSample } from '../lib/binDetectionModel';
-import { loadClientModel, predictCanvas, predictBlobViaServer } from '../lib/binModelClient';
-
-// ── Bin types ─────────────────────────────────────────────────────────────
+// ── Bin types — generic UI label regardless of which product matched ─────
 const BIN_TYPES = [
   { value: 'bin', label: 'Recycling Bin', emoji: '🗑️', color: '#2E7D32' },
 ];
@@ -25,7 +24,6 @@ export default function ScanBinPage({ binId, binData, onComplete, onCancel }) {
   const [lockStreak,   setLockStreak]  = useState(0);
   const [photoPreview, setPhotoPreview]= useState('');
   const [saving,       setSaving]      = useState(false);
-  const [modelVersion, setModelVersion]= useState(process.env.REACT_APP_BIN_MODEL_VERSION || '1');
 
   const videoRef      = useRef(null);
   const detectCanvas  = useRef(null);
@@ -33,30 +31,12 @@ export default function ScanBinPage({ binId, binData, onComplete, onCancel }) {
   const streamRef     = useRef(null);
   const intervalRef   = useRef(null);
   const photoFileRef  = useRef(null);
-  const streakRef     = useRef(0);
-  const candidateRef  = useRef(null);
-
-  useEffect(() => {
-    const unsub = onSnapshot(
-      doc(db, 'model_config', 'bin'),
-      snap => {
-        const data = snap.exists() ? snap.data() : null;
-        const currentVersion = data?.currentVersion;
-        if (currentVersion !== undefined && currentVersion !== null && currentVersion !== '') {
-          setModelVersion(String(currentVersion));
-        }
-      },
-      err => {
-        console.warn('Failed to load model version:', err?.message || err);
-      }
-    );
-    return unsub;
-  }, []);
+  const detectorRef   = useRef(new BinDetector()); // ported from Flutter BinDetector
 
   const stopCamera = useCallback(() => {
     if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
     if (streamRef.current)   { streamRef.current.getTracks().forEach(t => t.stop()); streamRef.current = null; }
-    streakRef.current = 0; candidateRef.current = null;
+    detectorRef.current.reset();
     if (videoRef.current) videoRef.current.srcObject = null;
     setCameraReady(false);
   }, []);
@@ -87,89 +67,34 @@ export default function ScanBinPage({ binId, binData, onComplete, onCancel }) {
 
   const startDetectionLoop = useCallback(() => {
     if (intervalRef.current) clearInterval(intervalRef.current);
-    streakRef.current = 0; candidateRef.current = null;
+    detectorRef.current.reset();
 
     intervalRef.current = setInterval(() => {
       const v = videoRef.current, c = detectCanvas.current;
       if (!v || !c || !v.videoWidth || !v.videoHeight) return;
 
-      const result = detectBinInFrame(c, v);
+      const detector = detectorRef.current;
+      detector.update(c, v); // ported BinDetector — 8-check pipeline
 
-      if (result) {
-        if (result === candidateRef.current) {
-          streakRef.current++;
-          setLockStreak(streakRef.current);
-          const rem = LOCK_FRAMES - streakRef.current;
-          const bt  = getBinType(result);
-          if (rem > 0) setStatus(`${bt.emoji} ${bt.label} — hold steady (${rem})`);
-          if (streakRef.current >= LOCK_FRAMES) {
-            // Before auto-capture, validate with ML model (client first, then server fallback)
-            (async () => {
-              setStatus('Verifying with model…');
-              const v = videoRef.current, c = detectCanvas.current;
-              let verified = false;
-              let verificationAttempted = false;
+      setLockStreak(detector.streak);
 
-              try {
-                await loadClientModel();
-                const score = await predictCanvas(c, 224);
-                if (score !== null) {
-                  verificationAttempted = true;
-                  verified = score >= 0.8;
-                }
-
-                if (!verified && process.env.REACT_APP_BIN_DETECTOR_URL) {
-                  const snap = document.createElement('canvas'); snap.width = v.videoWidth; snap.height = v.videoHeight;
-                  snap.getContext('2d').drawImage(v, 0, 0, snap.width, snap.height);
-                  const blob = await new Promise(r => snap.toBlob(r, 'image/jpeg', 0.9));
-                  const serverScore = await predictBlobViaServer(blob, process.env.REACT_APP_BIN_DETECTOR_URL + '/detect');
-                  if (serverScore !== null) {
-                    verificationAttempted = true;
-                    verified = serverScore >= 0.8;
-                  }
-                }
-              } catch (e) {
-                console.warn(e);
-              }
-
-              if (verified) {
-                setDetectedType(result);
-                setStatus(`✅ ${bt.label} confirmed!`);
-                clearInterval(intervalRef.current);
-                intervalRef.current = null;
-                capturePhoto();
-                return;
-              }
-
-              if (!verificationAttempted) {
-                setStatus('Model not installed yet — using live detector.');
-                setDetectedType(result);
-                clearInterval(intervalRef.current);
-                intervalRef.current = null;
-                capturePhoto();
-                return;
-              }
-
-              streakRef.current = 0; candidateRef.current = null; setLockStreak(0);
-              setStatus('Validation failed — try again with a real bin.');
-            })();
-          }
-        } else {
-          candidateRef.current = result;
-          streakRef.current    = 1;
-          setLockStreak(1);
-          setDetectedType(null);
-          const bt = getBinType(result);
-          setStatus(`${bt.emoji} ${bt.label} detected — hold steady…`);
-        }
+      if (detector.hasDetection) {
+        const bt = getBinType('bin');
+        setDetectedType('bin');
+        setStatus(`✅ ${bt.label} confirmed!`);
+        clearInterval(intervalRef.current);
+        intervalRef.current = null;
+        capturePhoto();
+      } else if (detector.streak > 0) {
+        const bt = getBinType('bin');
+        const rem = LOCK_FRAMES - detector.streak;
+        setDetectedType(null);
+        setStatus(rem > 0
+          ? `${bt.emoji} ${bt.label} — hold steady (${rem})`
+          : `${bt.emoji} ${bt.label} detected — hold steady…`);
       } else {
-        if (streakRef.current > 0) {
-          streakRef.current    = 0;
-          candidateRef.current = null;
-          setLockStreak(0);
-          setDetectedType(null);
-          setStatus('🔍 Point camera at the recycling bin…');
-        }
+        setDetectedType(null);
+        setStatus('🔍 Point camera at the recycling bin…');
       }
     }, 350);
   }, [capturePhoto]);
@@ -231,34 +156,11 @@ export default function ScanBinPage({ binId, binData, onComplete, onCancel }) {
     }
     setSaving(true);
     try {
-      // Attempt to get a model score from the client model (optional)
-      let predictedScore = null;
-      try {
-        await loadClientModel();
-        const c = captureCanvas.current;
-        if (c) {
-          const score = await predictCanvas(c, 224);
-          if (score !== null) predictedScore = score;
-        }
-      } catch (e) {
-        console.warn('Model score unavailable:', e?.message || e);
-      }
-
-      const trainingSample = await saveTrainingSample(file, detectedType || 'bin', {
-        predictedLabel: detectedType || 'bin',
-        predictedScore,
-        binId,
-        verifiedBy: auth?.currentUser?.uid || 'admin',
-        modelVersion,
-      });
-
-      if (!trainingSample?.imageUrl) {
-        throw new Error('Training sample upload failed.');
-      }
-
-      // Save photo URL to the bin document
+      const sRef = ref(storage, `bin_photos/${binId}-${Date.now()}.jpg`);
+      await uploadBytes(sRef, file);
+      const photoUrl = await getDownloadURL(sRef);
       await updateDoc(doc(db, 'bins', targetDocId), {
-        photoUrl: trainingSample.imageUrl,
+        photoUrl,
         ...(detectedType ? { binType: detectedType } : {}),
       });
       setPhase('saved');

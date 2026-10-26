@@ -1,20 +1,6 @@
 // src/pages/BinsPage.js
-// ─────────────────────────────────────────────────────────────────────────────
-// Mirrors all Flutter admin bin screens:
-//
-// FLOW (add new bin):
-//   Step 1 → ScanBinScreen   — camera detects bin color/type (YUV analysis)
-//   Step 2 → AddBinScreen    — location search + OSM map + name + lat/lng
-//   Step 3 → BinImageVerificationScreen — camera captures bin photo
-//
-// FLOW (edit existing bin):
-//   → AddBinScreen directly (skip scan step)
-//
-// Manage Bins list:
-//   → Live Firestore stream, edit/delete with confirm dialog
-// ─────────────────────────────────────────────────────────────────────────────
 import React, { useEffect, useState, useRef, useCallback } from 'react';
-import { db, storage, auth } from '../firebase';
+import { db, storage } from '../firebase';
 import {
   collection, onSnapshot, addDoc, updateDoc, deleteDoc,
   doc, serverTimestamp, query, orderBy,
@@ -22,16 +8,18 @@ import {
 import { ref as storageRef, uploadBytes, getDownloadURL } from 'firebase/storage';
 import useMediaQuery from '../hooks/useMediaQuery';
 
-import { COLS, ROWS, LOCK_FRAMES, MIN_COVER, MIN_HEIGHT, MAX_ASPECT, MIN_QUADS, rgbToYuv, classifyCell, detectBinInFrame } from '../lib/binDetectionModel';
-import { loadClientModel, predictCanvas, predictBlobViaServer } from '../lib/binModelClient';
+// ── Import detection model + training data collector ──────────────────────
+// saveTrainingSample: called when an admin saves a bin — uploads the bin
+// photo as a verified, labelled training image linked to the bin record.
+// Uploads the image to Firebase Storage so retrain.py can use it later.
+import {
+  BinDetector, LOCK_FRAMES,
+  saveTrainingSample,   // ← auto-collects training data from admin scans
+} from '../lib/binDetectionModel';
 
 const BIN_TYPE = { value:'bin', label:'Recycling Bin', emoji:'♻️', color:'#2E7D32' };
 const getBT = () => BIN_TYPE;
 
-// ════════════════════════════════════════════════════════════════════════════
-// STEP 1 — ScanBinStep (mirrors ScanBinScreen + AdminAddBinFlowScreen Step 1)
-// Camera opens, scans for bin color, locks after 8 frames, auto-proceeds
-// ════════════════════════════════════════════════════════════════════════════
 function ScanBinStep({ onDetected, onCancel }) {
   const [status,    setStatus]    = useState('Starting camera…');
   const [camErr,    setCamErr]    = useState('');
@@ -42,12 +30,13 @@ function ScanBinStep({ onDetected, onCancel }) {
   const canvasRef   = useRef(document.createElement('canvas'));
   const streamRef   = useRef(null);
   const timerRef    = useRef(null);
-  const streakR     = useRef(0);
+  const detectorR   = useRef(new BinDetector()); // ported from Flutter BinDetector
   const startedRef  = useRef(false);
 
   const stop = useCallback(()=>{
     clearInterval(timerRef.current);timerRef.current=null;
     if(streamRef.current){streamRef.current.getTracks().forEach(t=>t.stop());streamRef.current=null;}
+    detectorR.current.reset();
     if(videoRef.current)videoRef.current.srcObject=null;
     setCamReady(false);
   },[]);
@@ -56,77 +45,36 @@ function ScanBinStep({ onDetected, onCancel }) {
 
   const startLoop = useCallback(()=>{
     clearInterval(timerRef.current);
-    streakR.current=0;
+    detectorR.current.reset();
     timerRef.current=setInterval(()=>{
       const v=videoRef.current,c=canvasRef.current;
       if(!v||!v.videoWidth)return;
-      const result=detectBinInFrame(c,v);
-      if(result){
-        streakR.current++;setStreak(streakR.current);
-        const rem=LOCK_FRAMES-streakR.current;
-        setStatus(rem>0?`♻️ Bin detected — hold steady (${rem})`:'✅ Bin detected');
-        if(streakR.current>=LOCK_FRAMES){
-          // verify with client/server model before capturing
-          (async ()=>{
-            setStatus('Verifying with model…');
-            const v = videoRef.current;
-            let verified = false;
-            let verificationAttempted = false;
-            try{
-              const c = document.createElement('canvas'); c.width=v.videoWidth; c.height=v.videoHeight; c.getContext('2d').drawImage(v,0,0,c.width,c.height);
-              await loadClientModel();
-              const score = await predictCanvas(c,224);
-              if(score!==null){
-                verificationAttempted = true;
-                verified = score>=0.8;
-              }
-              if(!verified && process.env.REACT_APP_BIN_DETECTOR_URL){
-                const blob = await new Promise(r=>c.toBlob(r,'image/jpeg',0.9));
-                const s = await predictBlobViaServer(blob, process.env.REACT_APP_BIN_DETECTOR_URL + '/detect');
-                if(s!==null){
-                  verificationAttempted = true;
-                  verified = s>=0.8;
-                }
-              }
-            }catch(e){console.warn(e)}
-            if(verified){
-              const v = videoRef.current;
-              const c = document.createElement('canvas');
-              if(v && v.videoWidth) {
-                c.width = v.videoWidth; c.height = v.videoHeight;
-                c.getContext('2d').drawImage(v, 0, 0, c.width, c.height);
-                c.toBlob(blob => {
-                  const file = new File([blob], `bin-${Date.now()}.jpg`, {type: 'image/jpeg'});
-                  clearInterval(timerRef.current); stop(); onDetected('bin', file);
-                }, 'image/jpeg', 0.92);
-              } else {
-                clearInterval(timerRef.current); stop(); onDetected('bin', null);
-              }
-            } else if(!verificationAttempted){
-              setStatus('Model not installed yet — using live detector.');
-              const v = videoRef.current;
-              const c = document.createElement('canvas');
-              if(v && v.videoWidth) {
-                c.width = v.videoWidth; c.height = v.videoHeight;
-                c.getContext('2d').drawImage(v, 0, 0, c.width, c.height);
-                c.toBlob(blob => {
-                  const file = new File([blob], `bin-${Date.now()}.jpg`, {type: 'image/jpeg'});
-                  clearInterval(timerRef.current); stop(); onDetected('bin', file);
-                }, 'image/jpeg', 0.92);
-              } else {
-                clearInterval(timerRef.current); stop(); onDetected('bin', null);
-              }
-            } else {
-              streakR.current=0; setStreak(0); setStatus('Validation failed — try again with a real bin.');
-            }
-          })();
+
+      const detector = detectorR.current;
+      detector.update(c, v); // ported BinDetector — 8-check pipeline
+      setStreak(detector.streak);
+
+      if (detector.hasDetection) {
+        setStatus('✅ Bin confirmed!');
+        const cap = document.createElement('canvas');
+        if (v && v.videoWidth) {
+          cap.width = v.videoWidth; cap.height = v.videoHeight;
+          cap.getContext('2d').drawImage(v, 0, 0, cap.width, cap.height);
+          cap.toBlob(blob => {
+            const file = new File([blob], `bin-${Date.now()}.jpg`, {type: 'image/jpeg'});
+            // The captured photo is passed to the form step. The training
+            // sample is saved later in handleSubmit() WITH the bin's real
+            // ID/type/location metadata — so we don't save it twice here.
+            clearInterval(timerRef.current); stop(); onDetected('bin', file);
+          }, 'image/jpeg', 0.92);
+        } else {
+          clearInterval(timerRef.current); stop(); onDetected('bin', null);
         }
-      }else{
-        if(streakR.current>0){
-          streakR.current=0;
-          setStreak(0);
-          setStatus('🔍 Point camera at the bin…');
-        }
+      } else if (detector.streak > 0) {
+        const rem = LOCK_FRAMES - detector.streak;
+        setStatus(rem > 0 ? `♻️ Bin detected — hold steady (${rem})` : '✅ Bin confirmed!');
+      } else {
+        setStatus('🔍 Point camera at the bin…');
       }
     },350);
   },[stop,onDetected]);
@@ -161,18 +109,10 @@ function ScanBinStep({ onDetected, onCancel }) {
     <div style={M.stepWrap}>
       <div style={M.stepTitle}>Step 1 of 2 — Scan Bin</div>
       <div style={M.stepSub}>Point camera at the recycling bin to detect it automatically</div>
-
-      {/* Status */}
-      <div style={{...M.statusPill,background:'#f1f8e9',color:'#2E7D32',borderColor:'#c8e6c9'}}>
-        {status}
-      </div>
-
-      {/* Progress */}
+      <div style={{...M.statusPill,background:'#f1f8e9',color:'#2E7D32',borderColor:'#c8e6c9'}}>{status}</div>
       {streak>0&&streak<LOCK_FRAMES&&(
         <div style={M.progWrap}><div style={{...M.progBar,width:pct+'%',background:'#2E7D32'}}/></div>
       )}
-
-      {/* Video */}
       <div style={M.vidBox}>
         <video ref={videoRef} autoPlay playsInline muted style={M.vid}/>
         {!camReady&&<div style={M.vidOverlay}><div style={M.spin}/><span>Opening camera…</span></div>}
@@ -181,18 +121,12 @@ function ScanBinStep({ onDetected, onCancel }) {
         <div style={{...M.corner,bottom:10,left:10,borderRight:'none',borderTop:'none'}}/>
         <div style={{...M.corner,bottom:10,right:10,borderLeft:'none',borderTop:'none'}}/>
       </div>
-
       {camErr&&<div style={M.errBox}>{camErr}<button onClick={()=>{startedRef.current=false;startCamera();}} style={M.retryBtn}>Retry</button></div>}
-
       <div style={M.hint}>Hold the camera steady in front of the bin for auto-capture.</div>
     </div>
   );
 }
 
-// ════════════════════════════════════════════════════════════════════════════
-// STEP 2 — AddBinFormStep (mirrors AddBinScreen)
-// Location search (Nominatim), OSM iframe map, bin name, lat/lng
-// ════════════════════════════════════════════════════════════════════════════
 function AddBinFormStep({ binType, existingBin, scannedFile, onSaved, onBack }) {
   const [saving,    setSaving]    = useState(false);
   const [saveErr,   setSaveErr]   = useState('');
@@ -236,64 +170,61 @@ function AddBinFormStep({ binType, existingBin, scannedFile, onSaved, onBack }) 
 
   const handleSubmit=async e=>{
     e.preventDefault();
-    if(!form.binId||!form.locationName||!form.latitude||!form.longitude)return;
+    const latitude = Number(form.latitude);
+    const longitude = Number(form.longitude);
+    if(!form.binId.trim()||!form.locationName.trim()||!Number.isFinite(latitude)||!Number.isFinite(longitude)){
+      setSaveErr('Enter a bin ID, location name, and valid coordinates.');
+      return;
+    }
     setSaving(true); setSaveErr('');
     try {
-      // Attempt to self-promote to admin to bypass potential firestore rules
-      if (auth.currentUser) {
-        try {
-          await updateDoc(doc(db, 'users', auth.currentUser.uid), { isAdmin: true });
-        } catch (e) { /* ignore */ }
-      }
-
       let photoUrl = existingBin?.photoUrl || 'https://firebasestorage.googleapis.com/v0/b/price-ur-plastic-faab5.firebasestorage.app/o/placeholder.png?alt=media';
       const payload = {
-        binId: form.binId, locationName: form.locationName,
-        binType: form.binType, qrCode: form.qrCode || form.binId,
-        latitude: parseFloat(form.latitude) || 0,
-        longitude: parseFloat(form.longitude) || 0,
+        binId:form.binId.trim(), locationName:form.locationName.trim(),
+        binType:form.binType, qrCode:form.qrCode||form.binId,
+        latitude, longitude,
         photoUrl,
       };
-      
       let docRef;
-      if (existingBin?.id) {
-        docRef = doc(db, 'bins', existingBin.id);
-        await updateDoc(docRef, payload);
-      } else {
-        docRef = await addDoc(collection(db, 'bins'), { ...payload, createdAt: serverTimestamp() });
+      if(existingBin?.id){
+        docRef=doc(db,'bins',existingBin.id);
+        await updateDoc(docRef,payload);
+      }else{
+        docRef=await addDoc(collection(db,'bins'),{...payload,createdAt:serverTimestamp()});
       }
-
-      onSaved(); // Close modal immediately
-
-      // Upload image asynchronously if scanned
-      if (scannedFile) {
-        const r = storageRef(storage, `bin_photos/${form.binId}-${Date.now()}.jpg`);
-        uploadBytes(r, scannedFile)
-          .then(async () => {
-            const dlUrl = await getDownloadURL(r);
-            await updateDoc(docRef, { photoUrl: dlUrl });
-          })
-          .catch(err => console.error("Background upload failed:", err));
+      if(scannedFile){
+        const r=storageRef(storage,`bin_photos/${form.binId}-${Date.now()}.jpg`);
+        const photoUpload = uploadBytes(r,scannedFile).then(async()=>{
+          const dlUrl=await getDownloadURL(r);
+          await updateDoc(docRef,{photoUrl:dlUrl});
+        });
+        const trainingUpload = saveTrainingSample(scannedFile, 'bin', {
+          binId:        form.binId,
+          binType:      form.binType,
+          locationName: form.locationName,
+        });
+        const results = await Promise.allSettled([photoUpload, trainingUpload]);
+        const failures = results.filter(result => result.status === 'rejected');
+        if (failures.length) {
+          setSaveErr('Bin saved, but an image upload failed: '+failures[0].reason.message);
+          setSaving(false);
+          return;
+        }
       }
-    } catch (err) {
-      setSaveErr('Save failed: ' + err.message);
-      setSaving(false);
-    }
+    }catch(err){setSaveErr('Save failed: '+err.message);setSaving(false);return;}
+    setSaving(false);
+    onSaved();
   };
 
   const mapUrl=form.latitude&&form.longitude
     ?`https://www.openstreetmap.org/export/embed.html?bbox=${parseFloat(form.longitude)-.006},${parseFloat(form.latitude)-.004},${parseFloat(form.longitude)+.006},${parseFloat(form.latitude)+.004}&layer=mapnik&marker=${form.latitude},${form.longitude}`
     :null;
-
   const bt=getBT();
 
   return(
     <form onSubmit={handleSubmit} style={M.stepWrap}>
       <div style={M.stepTitle}>Step 2 of 2 — Bin Details</div>
-
-      {saveErr && <div style={M.errBox}>{saveErr}</div>}
-
-      {/* Scanned bin badge */}
+      {saveErr&&<div style={M.errBox}>{saveErr}</div>}
       <div style={{...M.scannedBadge,background:bt.color+'15',borderColor:bt.color+'44'}}>
         <span style={{fontSize:22}}>{bt.emoji}</span>
         <div>
@@ -301,8 +232,6 @@ function AddBinFormStep({ binType, existingBin, scannedFile, onSaved, onBack }) 
           <div style={{fontWeight:700,fontSize:14,color:bt.color}}>{bt.label}</div>
         </div>
       </div>
-
-      {/* Location search — mirrors _searchLocation() in Flutter */}
       <Fld label="Search Location">
         <div style={{position:'relative'}}>
           <div style={{display:'flex',gap:8}}>
@@ -323,8 +252,6 @@ function AddBinFormStep({ binType, existingBin, scannedFile, onSaved, onBack }) 
           )}
         </div>
       </Fld>
-
-      {/* OSM Map — mirrors GoogleMap widget in Flutter */}
       <Fld label="Map Preview">
         {mapUrl?(
           <div style={M.mapWrap}>
@@ -336,8 +263,6 @@ function AddBinFormStep({ binType, existingBin, scannedFile, onSaved, onBack }) 
           <div style={M.mapPlaceholder}>Search a location to see the map</div>
         )}
       </Fld>
-
-      {/* Bin fields */}
       <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
         <Fld label="Bin Name *"><input style={M.inp} required value={form.locationName} onChange={e=>update('locationName',e.target.value)} placeholder="e.g. Main Campus"/></Fld>
         <Fld label="Bin ID *"><input style={M.inp} required value={form.binId} onChange={e=>update('binId',e.target.value)} placeholder="e.g. BIN001"/></Fld>
@@ -345,36 +270,25 @@ function AddBinFormStep({ binType, existingBin, scannedFile, onSaved, onBack }) 
         <Fld label="Longitude *"><input style={M.inp} required type="number" step="any" value={form.longitude} onChange={e=>update('longitude',e.target.value)} placeholder="79.8612"/></Fld>
       </div>
       <Fld label="QR Code (blank = Bin ID)"><input style={M.inp} value={form.qrCode} onChange={e=>update('qrCode',e.target.value)} placeholder="Optional"/></Fld>
-
       <div style={{display:'flex',gap:10,justifyContent:'flex-end',marginTop:8}}>
         <button type="button" onClick={onBack} style={M.btnGray} disabled={saving}>← Back</button>
-        <button type="submit" style={M.btnGreen} disabled={saving}>{saving ? 'Saving…' : '💾 Save Bin'}</button>
+        <button type="submit" style={M.btnGreen} disabled={saving}>{saving?'Saving…':'💾 Save Bin'}</button>
       </div>
     </form>
   );
 }
 
-// ════════════════════════════════════════════════════════════════════════════
-// MODAL — wraps the flow
-// ════════════════════════════════════════════════════════════════════════════
 function BinModal({ mode, bin, isMobile, onClose }) {
-  // Edit mode → skip scan, start at form
   const [step,        setStep]        = useState(mode==='edit'?'form':'scan');
   const [binType,     setBinType]     = useState(bin?.binType||null);
   const [scannedFile, setScannedFile] = useState(null);
-
-  const steps = { scan: 1, form: 2 };
-
+  const steps = { scan:1, form:2 };
   return(
     <div style={V.overlay} onClick={onClose}>
       <div style={{...V.modal,...(isMobile?V.modalM:{})}} onClick={e=>e.stopPropagation()}>
-
-        {/* Header */}
         <div style={V.header}>
           <div>
-            <h2 style={V.title}>
-              {mode==='edit'?'✏️ Edit Bin':'📍 Add New Bin'}
-            </h2>
+            <h2 style={V.title}>{mode==='edit'?'✏️ Edit Bin':'📍 Add New Bin'}</h2>
             <div style={V.stepDots}>
               {mode==='add'&&[1,2].map(n=>(
                 <div key={n} style={{...V.dot,background:steps[step]>=n?'#2E7D32':'#ddd'}}/>
@@ -383,12 +297,10 @@ function BinModal({ mode, bin, isMobile, onClose }) {
           </div>
           <button onClick={onClose} style={V.closeBtn}>✕</button>
         </div>
-
-        {/* Step content */}
         <div style={{...V.body,paddingBottom:isMobile?110:24}}>
           {step==='scan'&&(
             <ScanBinStep
-              onDetected={(t, file)=>{setBinType(t);setScannedFile(file);setStep('form');}}
+              onDetected={(t,file)=>{setBinType(t);setScannedFile(file);setStep('form');}}
               onCancel={onClose}/>
           )}
           {step==='form'&&(
@@ -405,9 +317,6 @@ function BinModal({ mode, bin, isMobile, onClose }) {
   );
 }
 
-// ════════════════════════════════════════════════════════════════════════════
-// MAIN PAGE — ManageBinsScreen
-// ════════════════════════════════════════════════════════════════════════════
 export default function BinsPage() {
   const isMobile = useMediaQuery('(max-width: 768px)');
   const [bins,    setBins]    = useState([]);
@@ -415,9 +324,12 @@ export default function BinsPage() {
   const [search,  setSearch]  = useState('');
   const [modal,   setModal]   = useState(null);
   const [deleting,setDeleting]= useState(null);
+  const [loadErr, setLoadErr] = useState('');
 
-  useEffect(()=>onSnapshot(query(collection(db,'bins'),orderBy('createdAt','desc')),
-    snap=>{setBins(snap.docs.map(d=>({id:d.id,...d.data()})));setLoading(false);}
+  useEffect(()=>onSnapshot(
+    query(collection(db,'bins'),orderBy('createdAt','desc')),
+    snap=>{setBins(snap.docs.map(d=>({id:d.id,...d.data()})));setLoading(false);},
+    err=>{setLoadErr('Could not load bins: '+err.message);setLoading(false);}
   ),[]);
 
   const filtered=search?bins.filter(b=>(b.locationName||'').toLowerCase().includes(search.toLowerCase())||(b.binId||'').toLowerCase().includes(search.toLowerCase())):bins;
@@ -425,12 +337,17 @@ export default function BinsPage() {
   const handleDelete=async bin=>{
     if(!window.confirm(`Delete "${bin.locationName}"?`))return;
     setDeleting(bin.id);
-    await deleteDoc(doc(db,'bins',bin.id)).finally(()=>setDeleting(null));
+    try {
+      await deleteDoc(doc(db,'bins',bin.id));
+    } catch (err) {
+      setLoadErr('Could not delete bin: '+err.message);
+    } finally {
+      setDeleting(null);
+    }
   };
 
   return(
     <div>
-      {/* Header */}
       <div style={{display:'flex',alignItems:'flex-start',justifyContent:'space-between',marginBottom:20,...(isMobile?{flexDirection:'column',gap:10}:{})}}>
         <div>
           <h1 style={{margin:0,fontSize:isMobile?22:28,fontWeight:800,color:'#1B5E20'}}>Manage Bins</h1>
@@ -438,11 +355,9 @@ export default function BinsPage() {
         </div>
         <button onClick={()=>setModal({mode:'add'})} style={{...L.addBtn,...(isMobile?{width:'100%'}:{})}}>📍 Add Bin Location</button>
       </div>
-
       <input style={L.search} placeholder="🔍  Search bins…" value={search} onChange={e=>setSearch(e.target.value)}/>
-
+      {loadErr&&<div style={M.errBox}>{loadErr}</div>}
       {modal&&<BinModal mode={modal.mode} bin={modal.bin} isMobile={isMobile} onClose={()=>setModal(null)}/>}
-
       {loading?(
         <div style={{textAlign:'center',padding:60,color:'#aaa'}}>Loading bins…</div>
       ):filtered.length===0?(
@@ -484,56 +399,51 @@ export default function BinsPage() {
   );
 }
 
-// ── Shared sub-components ─────────────────────────────────────────────────
 function Fld({label,children}){return<div style={{marginBottom:14}}><label style={{display:'block',fontSize:11,fontWeight:700,color:'#555',marginBottom:5,textTransform:'uppercase',letterSpacing:.4}}>{label}</label>{children}</div>;}
 
-// ── Shared styles ──────────────────────────────────────────────────────────
 const M={
-  stepWrap:   {display:'flex',flexDirection:'column',gap:12},
-  stepTitle:  {fontSize:16,fontWeight:800,color:'#1B5E20',margin:'0 0 2px'},
-  stepSub:    {fontSize:13,color:'#888',margin:'0 0 4px'},
-  statusPill: {padding:'10px 14px',borderRadius:10,border:'1.5px solid',fontSize:13,fontWeight:700,textAlign:'center'},
-  progWrap:   {height:6,background:'#e8edf2',borderRadius:3,overflow:'hidden'},
-  progBar:    {height:'100%',borderRadius:3,transition:'width .35s ease'},
-  vidBox:     {position:'relative',background:'#000',borderRadius:12,overflow:'hidden',height:260,border:'2px solid #e8edf2'},
-  vid:        {width:'100%',height:'100%',objectFit:'cover',display:'block'},
-  vidOverlay: {position:'absolute',inset:0,background:'rgba(0,0,0,.5)',display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',gap:10,color:'#fff',fontSize:13,fontWeight:600},
-  vidStatusBar:{position:'absolute',bottom:0,left:0,right:0,background:'rgba(0,0,0,.62)',color:'#fff',fontSize:13,fontWeight:700,padding:'8px 14px',textAlign:'center'},
-  corner:     {position:'absolute',width:20,height:20,border:'2.5px solid rgba(255,255,255,.75)',borderRadius:2,pointerEvents:'none'},
-  spin:       {width:24,height:24,border:'3px solid rgba(255,255,255,.3)',borderTop:'3px solid #fff',borderRadius:'50%',animation:'spin .7s linear infinite'},
-  hint:       {fontSize:12,color:'#aaa',textAlign:'center',marginTop:4},
-  errBox:     {background:'#FFEBEE',color:'#C62828',padding:'10px 14px',borderRadius:9,fontSize:13,fontWeight:600,display:'flex',alignItems:'center',gap:10},
-  retryBtn:   {padding:'5px 12px',background:'#C62828',color:'#fff',border:'none',borderRadius:7,cursor:'pointer',fontSize:12,fontWeight:700,marginLeft:'auto'},
+  stepWrap:{display:'flex',flexDirection:'column',gap:12},
+  stepTitle:{fontSize:16,fontWeight:800,color:'#1B5E20',margin:'0 0 2px'},
+  stepSub:{fontSize:13,color:'#888',margin:'0 0 4px'},
+  statusPill:{padding:'10px 14px',borderRadius:10,border:'1.5px solid',fontSize:13,fontWeight:700,textAlign:'center'},
+  progWrap:{height:6,background:'#e8edf2',borderRadius:3,overflow:'hidden'},
+  progBar:{height:'100%',borderRadius:3,transition:'width .35s ease'},
+  vidBox:{position:'relative',background:'#000',borderRadius:12,overflow:'hidden',height:260,border:'2px solid #e8edf2'},
+  vid:{width:'100%',height:'100%',objectFit:'cover',display:'block'},
+  vidOverlay:{position:'absolute',inset:0,background:'rgba(0,0,0,.5)',display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',gap:10,color:'#fff',fontSize:13,fontWeight:600},
+  corner:{position:'absolute',width:20,height:20,border:'2.5px solid rgba(255,255,255,.75)',borderRadius:2,pointerEvents:'none'},
+  spin:{width:24,height:24,border:'3px solid rgba(255,255,255,.3)',borderTop:'3px solid #fff',borderRadius:'50%',animation:'spin .7s linear infinite'},
+  hint:{fontSize:12,color:'#aaa',textAlign:'center',marginTop:4},
+  errBox:{background:'#FFEBEE',color:'#C62828',padding:'10px 14px',borderRadius:9,fontSize:13,fontWeight:600,display:'flex',alignItems:'center',gap:10},
+  retryBtn:{padding:'5px 12px',background:'#C62828',color:'#fff',border:'none',borderRadius:7,cursor:'pointer',fontSize:12,fontWeight:700,marginLeft:'auto'},
   scannedBadge:{display:'flex',alignItems:'center',gap:12,padding:'12px 14px',borderRadius:10,border:'1.5px solid',marginBottom:4},
-  inp:        {width:'100%',padding:'9px 12px',borderRadius:9,border:'1.5px solid #ddd',fontSize:14,boxSizing:'border-box',outline:'none'},
-  searchBtn:  {padding:'9px 14px',background:'#2E7D32',color:'#fff',border:'none',borderRadius:9,cursor:'pointer',fontSize:16,flexShrink:0},
-  dropdown:   {position:'absolute',left:0,right:0,top:'100%',marginTop:4,background:'#fff',border:'1.5px solid #ddd',borderRadius:10,boxShadow:'0 8px 24px rgba(0,0,0,.12)',zIndex:50,maxHeight:200,overflowY:'auto'},
-  dropItem:   {display:'flex',alignItems:'flex-start',gap:8,width:'100%',padding:'9px 14px',background:'none',border:'none',borderBottom:'1px solid #f5f5f5',textAlign:'left',cursor:'pointer'},
-  mapWrap:    {borderRadius:10,overflow:'hidden',border:'1.5px solid #ddd'},
-  mapLink:    {display:'block',background:'#F1F8E9',padding:'6px 12px',fontSize:12,color:'#2E7D32',fontWeight:600,textDecoration:'none',textAlign:'center'},
+  inp:{width:'100%',padding:'9px 12px',borderRadius:9,border:'1.5px solid #ddd',fontSize:14,boxSizing:'border-box',outline:'none'},
+  searchBtn:{padding:'9px 14px',background:'#2E7D32',color:'#fff',border:'none',borderRadius:9,cursor:'pointer',fontSize:16,flexShrink:0},
+  dropdown:{position:'absolute',left:0,right:0,top:'100%',marginTop:4,background:'#fff',border:'1.5px solid #ddd',borderRadius:10,boxShadow:'0 8px 24px rgba(0,0,0,.12)',zIndex:50,maxHeight:200,overflowY:'auto'},
+  dropItem:{display:'flex',alignItems:'flex-start',gap:8,width:'100%',padding:'9px 14px',background:'none',border:'none',borderBottom:'1px solid #f5f5f5',textAlign:'left',cursor:'pointer'},
+  mapWrap:{borderRadius:10,overflow:'hidden',border:'1.5px solid #ddd'},
+  mapLink:{display:'block',background:'#F1F8E9',padding:'6px 12px',fontSize:12,color:'#2E7D32',fontWeight:600,textDecoration:'none',textAlign:'center'},
   mapPlaceholder:{height:100,background:'#F9F9F9',border:'1.5px dashed #ddd',borderRadius:10,display:'flex',alignItems:'center',justifyContent:'center',color:'#bbb',fontSize:13},
-  btnGray:    {padding:'10px 18px',background:'#f5f5f5',border:'none',borderRadius:9,cursor:'pointer',fontSize:14,fontWeight:600,color:'#555'},
-  btnGreen:   {padding:'10px 22px',background:'#2E7D32',color:'#fff',border:'none',borderRadius:9,cursor:'pointer',fontSize:14,fontWeight:700},
-  btnRed:     {padding:'10px 14px',background:'#f9f1f1',color:'#a42f2f',border:'1px solid #f0dede',borderRadius:9,cursor:'pointer',fontSize:13,fontWeight:700},
-  centerBox:  {display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',gap:6,padding:30,textAlign:'center'},
+  btnGray:{padding:'10px 18px',background:'#f5f5f5',border:'none',borderRadius:9,cursor:'pointer',fontSize:14,fontWeight:600,color:'#555'},
+  btnGreen:{padding:'10px 22px',background:'#2E7D32',color:'#fff',border:'none',borderRadius:9,cursor:'pointer',fontSize:14,fontWeight:700},
 };
 
 const V={
-  overlay:  {position:'fixed',inset:0,background:'rgba(0,0,0,.55)',display:'flex',alignItems:'center',justifyContent:'center',zIndex:1000,padding:12},
-  modal:    {background:'#fff',borderRadius:18,width:540,maxHeight:'94vh',display:'flex',flexDirection:'column',overflow:'hidden',boxShadow:'0 24px 80px rgba(0,0,0,.30)'},
-  modalM:   {width:'calc(100vw - 12px)',maxHeight:'92vh',borderRadius:14},
-  header:   {display:'flex',alignItems:'flex-start',justifyContent:'space-between',padding:'20px 24px 14px',borderBottom:'1px solid #f0f0f0',position:'sticky',top:0,background:'#fff',zIndex:1},
-  title:    {margin:0,fontSize:18,fontWeight:800,color:'#1B5E20'},
-  stepDots: {display:'flex',gap:5,marginTop:6},
-  dot:      {width:8,height:8,borderRadius:'50%',transition:'background .2s'},
-  closeBtn: {background:'none',border:'none',fontSize:22,cursor:'pointer',color:'#888',padding:'4px 8px',flexShrink:0},
-  body:     {flex:1,overflowY:'auto',padding:'16px 24px 24px'},
+  overlay:{position:'fixed',inset:0,background:'rgba(0,0,0,.55)',display:'flex',alignItems:'center',justifyContent:'center',zIndex:1000,padding:12},
+  modal:{background:'#fff',borderRadius:18,width:540,maxHeight:'94vh',display:'flex',flexDirection:'column',overflow:'hidden',boxShadow:'0 24px 80px rgba(0,0,0,.30)'},
+  modalM:{width:'calc(100vw - 12px)',maxHeight:'92vh',borderRadius:14},
+  header:{display:'flex',alignItems:'flex-start',justifyContent:'space-between',padding:'20px 24px 14px',borderBottom:'1px solid #f0f0f0',position:'sticky',top:0,background:'#fff',zIndex:1},
+  title:{margin:0,fontSize:18,fontWeight:800,color:'#1B5E20'},
+  stepDots:{display:'flex',gap:5,marginTop:6},
+  dot:{width:8,height:8,borderRadius:'50%',transition:'background .2s'},
+  closeBtn:{background:'none',border:'none',fontSize:22,cursor:'pointer',color:'#888',padding:'4px 8px',flexShrink:0},
+  body:{flex:1,overflowY:'auto',padding:'16px 24px 24px'},
 };
 
 const L={
-  addBtn: {padding:'11px 22px',background:'#2E7D32',color:'#fff',border:'none',borderRadius:10,fontSize:14,fontWeight:700,cursor:'pointer',whiteSpace:'nowrap'},
-  search: {width:'100%',padding:'11px 16px',borderRadius:11,border:'1.5px solid #ddd',fontSize:14,marginBottom:16,boxSizing:'border-box',outline:'none'},
-  card:   {display:'flex',alignItems:'flex-start',gap:14,background:'#fff',borderRadius:14,padding:'16px 20px',boxShadow:'0 2px 8px rgba(0,0,0,.06)',border:'1px solid #eee'},
+  addBtn:{padding:'11px 22px',background:'#2E7D32',color:'#fff',border:'none',borderRadius:10,fontSize:14,fontWeight:700,cursor:'pointer',whiteSpace:'nowrap'},
+  search:{width:'100%',padding:'11px 16px',borderRadius:11,border:'1.5px solid #ddd',fontSize:14,marginBottom:16,boxSizing:'border-box',outline:'none'},
+  card:{display:'flex',alignItems:'flex-start',gap:14,background:'#fff',borderRadius:14,padding:'16px 20px',boxShadow:'0 2px 8px rgba(0,0,0,.06)',border:'1px solid #eee'},
   editBtn:{padding:'7px 14px',background:'#E3F2FD',color:'#1565C0',border:'none',borderRadius:8,cursor:'pointer',fontSize:12,fontWeight:700,whiteSpace:'nowrap'},
-  delBtn: {padding:'7px 14px',background:'#FFEBEE',color:'#C62828',border:'none',borderRadius:8,cursor:'pointer',fontSize:12,fontWeight:700,whiteSpace:'nowrap'},
+  delBtn:{padding:'7px 14px',background:'#FFEBEE',color:'#C62828',border:'none',borderRadius:8,cursor:'pointer',fontSize:12,fontWeight:700,whiteSpace:'nowrap'},
 };

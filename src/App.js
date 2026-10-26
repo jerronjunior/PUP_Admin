@@ -9,6 +9,7 @@ import LoginPage       from './pages/LoginPage';
 import DashboardPage   from './pages/DashboardPage';
 import BinsPage        from './pages/BinsPage';
 import RewardsPage     from './pages/RewardsPage';
+import RedemptionsPage from './pages/RedemptionsPage';
 import UsersPage       from './pages/UsersPage';
 import NotificationsPage from './pages/NotificationsPage';
 import ProfilePage     from './pages/ProfilePage';
@@ -23,6 +24,7 @@ const NAV = [
   { to: '/users',         label: 'Users & Points', mobileLabel: 'Users',   icon: '👥' },
   { to: '/bins',          label: 'Manage Bins',    mobileLabel: 'Bins',    icon: '🗑️' },
   { to: '/rewards',       label: 'Manage Rewards', mobileLabel: 'Rewards', icon: '🎁' },
+  { to: '/redemptions',   label: 'Redemptions',    mobileLabel: 'Redeem',  icon: '🎟️' },
   { to: '/notifications', label: 'Notifications',  mobileLabel: 'Alerts',  icon: '🔔' },
 ];
 
@@ -165,6 +167,7 @@ export default function App() {
               <Route path="/users"         element={<UsersPage />} />
               <Route path="/bins"          element={<BinsPage />} />
               <Route path="/rewards"       element={<RewardsPage />} />
+              <Route path="/redemptions"   element={<RedemptionsPage />} />
               <Route path="/notifications" element={<NotificationsPage />} />
               <Route path="/profile"       element={<ProfilePage user={user} />} />
               <Route path="*"              element={<Navigate to="/" />} />
@@ -182,6 +185,7 @@ export default function App() {
               <Route path="/users"         element={<UsersPage />} />
               <Route path="/bins"          element={<BinsPage />} />
               <Route path="/rewards"       element={<RewardsPage />} />
+              <Route path="/redemptions"   element={<RedemptionsPage />} />
               <Route path="/notifications" element={<NotificationsPage />} />
               <Route path="/profile"       element={<ProfilePage user={user} />} />
               <Route path="*"              element={<Navigate to="/" />} />
